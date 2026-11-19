@@ -49,7 +49,20 @@ def fake_answer(system: str, user: str, seed: int) -> str:
 
 class Handler(BaseHTTPRequestHandler):
     requests_seen: list[dict] = []
+    hits: list[tuple[str, str, str | None]] = []  # (method, path, Authorization) of every request
     fail_first: int = 0  # respond 500 to this many requests first
+    redirect_to: str | None = None  # answer everything with a 302 to this URL
+    think_prefix: str = ""  # prepended to every answer, e.g. a <think> block
+
+    def _redirected(self) -> bool:
+        type(self).hits.append((self.command, self.path, self.headers.get("Authorization")))
+        if not self.redirect_to:
+            return False
+        self.send_response(302)
+        self.send_header("Location", self.redirect_to)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return True
 
     def log_message(self, *args):  # keep test output quiet
         pass
@@ -63,6 +76,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self._redirected():
+            return
         if self.path.startswith("/api/v0/models/"):
             self._send(200, {"id": "fake", "quantization": "Q0_FAKE", "arch": "none"})
         else:
@@ -70,7 +85,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        request = json.loads(self.rfile.read(length).decode("utf-8"))
+        raw = self.rfile.read(length)
+        if self._redirected():
+            return
+        request = json.loads(raw.decode("utf-8"))
         cls = type(self)
         if cls.fail_first > 0:
             cls.fail_first -= 1
@@ -78,7 +96,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         cls.requests_seen.append(request)
         messages = {m["role"]: m["content"] for m in request["messages"]}
-        answer = fake_answer(messages.get("system", ""), messages.get("user", ""), request.get("seed", 0))
+        answer = cls.think_prefix + fake_answer(
+            messages.get("system", ""), messages.get("user", ""), request.get("seed", 0)
+        )
         self._send(200, {
             "model": request["model"],
             "choices": [{"index": 0, "finish_reason": "stop",
@@ -88,10 +108,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def serve(port: int = 0):
-    Handler.requests_seen = []
-    Handler.fail_first = 0
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+def serve(port: int = 0, handler: type[Handler] = Handler):
+    """Serve on 127.0.0.1. Pass a ``Handler`` subclass to run a second,
+    differently behaved server at the same time."""
+    handler.requests_seen = []
+    handler.hits = []
+    handler.fail_first = 0
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

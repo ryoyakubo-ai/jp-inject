@@ -10,6 +10,11 @@ llama.cpp server, vLLM). Only the standard library is used.
 * By default only loopback and private addresses are accepted. Sending
   injection tests to a hosted API usually needs the provider's permission;
   pass ``allow_remote=True`` only when you have it.
+* HTTP redirects are never followed, and local endpoints are contacted
+  directly (no proxy), so prompts and the optional API key go to the
+  configured host and nowhere else.
+* A result file holds one experimental condition per model: resuming with
+  different settings or a different dataset version is refused.
 """
 
 from __future__ import annotations
@@ -37,6 +42,35 @@ API_KEY_ENV = "JP_INJECT_API_KEY"
 
 class RemoteEndpointError(ValueError):
     """Raised when the endpoint is not local and remote use was not allowed."""
+
+
+class RedirectError(RuntimeError):
+    """Raised when the endpoint answers with an HTTP redirect."""
+
+
+class SettingsMismatchError(ValueError):
+    """Raised when a result file was recorded under different settings."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects instead of following them.
+
+    urllib would otherwise repeat the request, Authorization header included,
+    against whatever host the Location header names.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RedirectError(
+            f"{req.full_url} answered with a redirect to {newurl}; redirects are not followed. "
+            "Point --base-url at the final address."
+        )
+
+
+def _opener(base_url: str) -> urllib.request.OpenerDirector:
+    handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
+    if is_local_url(base_url):
+        handlers.append(urllib.request.ProxyHandler({}))  # never route local traffic via a proxy
+    return urllib.request.build_opener(*handlers)
 
 
 @dataclass
@@ -76,20 +110,24 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _post_json(url: str, body: dict[str, Any], timeout: float, api_key: str | None) -> dict[str, Any]:
+def _post_json(
+    opener: urllib.request.OpenerDirector, url: str, body: dict[str, Any], timeout: float, api_key: str | None
+) -> dict[str, Any]:
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json; charset=utf-8"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with opener.open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _get_json(url: str, timeout: float, api_key: str | None) -> dict[str, Any]:
+def _get_json(
+    opener: urllib.request.OpenerDirector, url: str, timeout: float, api_key: str | None
+) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with opener.open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -122,37 +160,117 @@ def _extract(response: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def done_keys(path: Path) -> set[tuple[str, int, str, str]]:
-    """Keys of generations already recorded in ``path``."""
-    keys: set[tuple[str, int, str, str]] = set()
+def _read_records(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     if not path.exists():
-        return keys
+        return records
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if not line:
                 continue
             try:
-                record = json.loads(line)
+                records.append(json.loads(line))
             except json.JSONDecodeError:
                 continue  # a line cut short by an interruption; it will be redone
-            keys.add((record["case_id"], record["repeat"], record["defense"], record["model"]))
-    return keys
+    return records
 
 
-def _model_info(config: RunConfig, api_key: str | None) -> dict[str, Any] | None:
+def done_keys(path: Path) -> set[tuple[str, int, str, str]]:
+    """Keys of generations already recorded in ``path``."""
+    return {(r["case_id"], r["repeat"], r["defense"], r["model"]) for r in _read_records(path)}
+
+
+def repair_tail(path: Path) -> str:
+    """Make sure ``path`` ends at a record boundary before appending to it.
+
+    An interrupted run can leave a last line without its newline. Appending
+    straight after it would glue the next record onto the fragment and lose
+    both. A complete record just gets its newline; a fragment is removed.
+    Returns what was done: ``"ok"``, ``"newline_added"`` or ``"fragment_removed"``.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return "ok"
+    data = path.read_bytes()
+    if data.endswith(b"\n"):
+        return "ok"
+    cut = data.rfind(b"\n") + 1  # 0 if the file holds a single unterminated line
+    try:
+        json.loads(data[cut:].decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        with path.open("r+b") as handle:
+            handle.truncate(cut)
+        return "fragment_removed"
+    with path.open("ab") as handle:
+        handle.write(b"\n")
+    return "newline_added"
+
+
+def _signature(config: RunConfig) -> dict[str, Any]:
+    """Everything that defines the experimental condition of a generation."""
+    return {
+        "dataset_sha256": dataset_sha256(),
+        "model_id": config.model,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "seed": config.seed,
+        "extra": config.extra,
+    }
+
+
+def _recorded_signature(record: dict[str, Any]) -> dict[str, Any]:
+    request = record.get("request") or {}
+    seed = request.get("seed")
+    return {
+        "dataset_sha256": record.get("dataset_sha256"),
+        "model_id": record.get("model_id"),
+        "temperature": request.get("temperature"),
+        "max_tokens": request.get("max_tokens"),
+        "seed": None if seed is None else seed - record.get("repeat", 0),
+        "extra": request.get("extra") or {},
+    }
+
+
+def check_settings(path: Path, config: RunConfig) -> None:
+    """Refuse to continue a result file recorded under other settings."""
+    wanted = _signature(config)
+    for record in _read_records(path):
+        if record.get("model") != config.model_label or record.get("defense") != config.defense:
+            continue
+        found = _recorded_signature(record)
+        differing = {
+            key: (found[key], wanted[key])
+            for key in wanted
+            if found[key] != wanted[key]
+            and not (key == "model_id" and found[key] is None)  # files from before 0.1.0
+        }
+        if differing:
+            details = "; ".join(f"{k}: recorded {a!r}, now {b!r}" for k, (a, b) in sorted(differing.items()))
+            raise SettingsMismatchError(
+                f"{path} already holds generations for model {config.model_label!r} "
+                f"(defense {config.defense!r}) recorded under different settings ({details}). "
+                "Mixing them would make the results meaningless. Use a different --out file "
+                "or a different --label."
+            )
+
+
+def _model_info(
+    opener: urllib.request.OpenerDirector, config: RunConfig, api_key: str | None
+) -> dict[str, Any] | None:
     """Best-effort model metadata (quantisation etc.) from LM Studio's REST API."""
     root = config.base_url.rstrip("/")
     if root.endswith("/v1"):
         root = root[: -len("/v1")]
     url = f"{root}/api/v0/models/{urllib.parse.quote(config.model, safe='')}"
     try:
-        return _get_json(url, timeout=10, api_key=api_key)
-    except Exception:  # not LM Studio, or an older version: simply not available
-        return None
+        return _get_json(opener, url, timeout=10, api_key=api_key)
+    except (urllib.error.URLError, RedirectError, TimeoutError, OSError, ValueError):
+        return None  # not LM Studio, or an older version: simply not available
 
 
-def _write_meta(config: RunConfig, api_key: str | None, planned: int) -> None:
+def _write_meta(
+    opener: urllib.request.OpenerDirector, config: RunConfig, api_key: str | None, planned: int
+) -> None:
     meta_path = config.out.with_suffix(config.out.suffix + ".meta.json")
     runs: list[dict[str, Any]] = []
     if meta_path.exists():
@@ -176,7 +294,7 @@ def _write_meta(config: RunConfig, api_key: str | None, planned: int) -> None:
         "planned_generations": planned,
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "model_info": _model_info(config, api_key),
+        "model_info": _model_info(opener, config, api_key),
     })
     meta_path.write_text(
         json.dumps({"invocations": runs}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -211,8 +329,13 @@ def run(
         )
 
     api_key = os.environ.get(API_KEY_ENV)
+    opener = _opener(config.base_url)
     ordered = _order(cases)
     config.out.parent.mkdir(parents=True, exist_ok=True)
+    repaired = repair_tail(config.out)
+    if repaired == "fragment_removed":
+        log(f"removed an incomplete last line from {config.out} (left by an interrupted run)")
+    check_settings(config.out, config)
     already = done_keys(config.out)
     todo = [
         (repeat, case)
@@ -226,7 +349,7 @@ def run(
     if not todo:
         return counts
 
-    _write_meta(config, api_key, len(todo))
+    _write_meta(opener, config, api_key, len(todo))
     url = config.base_url.rstrip("/") + "/chat/completions"
     sha = dataset_sha256()
     started = time.monotonic()
@@ -238,7 +361,7 @@ def run(
             result = None
             for attempt in range(1, config.retries + 1):
                 try:
-                    result = _extract(_post_json(url, body, config.timeout, api_key))
+                    result = _extract(_post_json(opener, url, body, config.timeout, api_key))
                     break
                 except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
                     log(f"  attempt {attempt}/{config.retries} failed for {case['id']}: {error}")
@@ -253,6 +376,7 @@ def run(
                 "repeat": repeat,
                 "defense": config.defense,
                 "model": config.model_label,
+                "model_id": config.model,
                 **result,
                 "request": {
                     "temperature": body["temperature"],
