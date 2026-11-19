@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .dataset import CROSS_ENV, VARIANT_BY_ID, VARIANTS, load_cases
-from .judge import judge
+from .judge import judge, strip_reasoning
 from .stats import bootstrap_mean, cluster_bootstrap_rate, wilson
 
 Row = dict[str, Any]
@@ -57,6 +57,16 @@ def judged_rows(records: Iterable[dict[str, Any]], cases: Iterable[dict[str, Any
         if case is None:
             continue  # recorded with a different dataset version
         verdict = judge(case, record.get("content"), record.get("finish_reason"))
+        request = record.get("request") or {}
+        settings = json.dumps(
+            {
+                "dataset": (record.get("dataset_sha256") or "")[:12],
+                "temperature": request.get("temperature"),
+                "max_tokens": request.get("max_tokens"),
+                "extra": request.get("extra") or {},
+            },
+            sort_keys=True, ensure_ascii=False,
+        )
         rows.append({
             "model": record["model"],
             "defense": record["defense"],
@@ -77,7 +87,9 @@ def judged_rows(records: Iterable[dict[str, Any]], cases: Iterable[dict[str, Any
             "valid": verdict.valid,
             "token_present": verdict.token_present,
             "reason": verdict.reason,
-            "content": record.get("content") or "",
+            # The final answer exactly as the judge saw it (reasoning removed).
+            "content": strip_reasoning(record.get("content") or ""),
+            "settings": settings,
         })
     return rows
 
@@ -162,11 +174,18 @@ def summarize(rows: list[Row]) -> dict[str, Any]:
             continue
         ja, ja0 = per_base[spec.id], per_base[spec.reference]
         en, en0 = per_base[other.id], per_base[other.reference]
+        # All three columns use the same base attacks: those run under all
+        # four conditions. Otherwise "JA change - EN change" would not equal
+        # the difference of the two changes shown beside it.
         shared = sorted(set(ja) & set(ja0) & set(en) & set(en0))
+        if not shared:
+            continue
+        ja_change = sum(ja[b] - ja0[b] for b in shared) / len(shared)
+        en_change = sum(en[b] - en0[b] for b in shared) / len(shared)
         mean, low, high = bootstrap_mean([(ja[b] - ja0[b]) - (en[b] - en0[b]) for b in shared])
         interactions.append({
             "ja": spec.id, "en": other.id, "bases": len(shared),
-            "ja_change": _paired(ja, ja0)["diff"], "en_change": _paired(en, en0)["diff"],
+            "ja_change": ja_change, "en_change": en_change,
             "difference": mean, "low": low, "high": high,
         })
 
@@ -206,6 +225,7 @@ def summarize(rows: list[Row]) -> dict[str, Any]:
     benign = [r for r in valid if r["kind"] == "benign"]
     return {
         "generations": len(rows),
+        "settings": sorted({r["settings"] for r in rows if "settings" in r}),
         "invalid": len(rows) - len(valid),
         "attack_generations": len(attacks),
         "benign": {"n": len(benign), "contaminated": sum(not r["success"] for r in benign)},
@@ -288,6 +308,11 @@ def render_markdown(summaries: dict[tuple[str, str], dict[str, Any]]) -> str:
         out += [f"## {model} (defense profile: {defense})", ""]
         out += [
             f"- Generations: {s['generations']} ({s['invalid']} without a usable answer, excluded)",
+            *(
+                [f"- **Warning: these generations were recorded under {len(s['settings'])} different "
+                 "settings or dataset versions. The rates below mix them and should not be used.**"]
+                if len(s.get("settings", [])) > 1 else []
+            ),
             f"- Benign controls: {s['benign']['contaminated']} of {s['benign']['n']} contained a code that should not appear",
             f"- Judge labels on attack cases: {', '.join(f'{k} {v}' for k, v in sorted(s['labels'].items()))}",
             "",
@@ -319,8 +344,9 @@ def render_markdown(summaries: dict[tuple[str, str], dict[str, Any]]) -> str:
         if s["interactions"]:
             out += ["### Is the effect specific to Japanese?", ""]
             out.append(_table(
-                ["Japanese technique", "English counterpart", "JA change", "EN change", "JA − EN"],
-                [[f"`{i['ja']}`", f"`{i['en']}`", _pp(i["ja_change"]), _pp(i["en_change"]), _diff(i, "difference")]
+                ["Japanese technique", "English counterpart", "Base attacks", "JA change", "EN change", "JA − EN"],
+                [[f"`{i['ja']}`", f"`{i['en']}`", str(i["bases"]), _pp(i["ja_change"]), _pp(i["en_change"]),
+                  _diff(i, "difference")]
                  for i in s["interactions"]],
             ))
             out.append("")
