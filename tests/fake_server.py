@@ -53,6 +53,7 @@ class Handler(BaseHTTPRequestHandler):
     fail_first: int = 0  # respond 500 to this many requests first
     redirect_to: str | None = None  # answer everything with a 302 to this URL
     think_prefix: str = ""  # prepended to every answer, e.g. a <think> block
+    quantization: str = "Q0_FAKE"  # reported by the model-metadata endpoint
 
     def _redirected(self) -> bool:
         type(self).hits.append((self.command, self.path, self.headers.get("Authorization")))
@@ -79,7 +80,8 @@ class Handler(BaseHTTPRequestHandler):
         if self._redirected():
             return
         if self.path.startswith("/api/v0/models/"):
-            self._send(200, {"id": "fake", "quantization": "Q0_FAKE", "arch": "none"})
+            self._send(200, {"id": "fake", "quantization": self.quantization, "arch": "none",
+                             "state": "loaded", "loaded_context_length": 4096})
         else:
             self._send(404, {"error": "not found"})
 

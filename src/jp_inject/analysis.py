@@ -14,6 +14,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import conditions
 from .dataset import CROSS_ENV, VARIANT_BY_ID, VARIANTS, load_cases
 from .judge import judge, strip_reasoning
 from .stats import bootstrap_mean, cluster_bootstrap_rate, wilson
@@ -30,9 +31,23 @@ CROSS_IDS = [f"{variant}@{env}" for variant, env in CROSS_ENV]
 # --------------------------------------------------------------------------
 
 
+class MixedConditionsError(ValueError):
+    """Raised when result files for one model were recorded under different conditions."""
+
+
 def load_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
-    """Read result files; the last record wins if a generation appears twice."""
-    latest: dict[tuple, dict[str, Any]] = {}
+    """Read result files.
+
+    Every generation for one model label and defense profile must come from
+    the same condition (test cases, server, model file, sampling settings);
+    otherwise the rates would average over different experiments, and which
+    of two conflicting records survived would depend on the order the files
+    were given in. Such input raises :class:`MixedConditionsError`.
+
+    If the same generation appears twice under the same condition (a re-run),
+    the most recently started one is kept.
+    """
+    records: list[dict[str, Any]] = []
     for path in paths:
         with Path(path).open(encoding="utf-8") as handle:
             for line in handle:
@@ -43,8 +58,29 @@ def load_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                key = (record["model"], record["defense"], record["case_id"], record["repeat"])
-                latest[key] = record
+                record["_source"] = str(path)
+                records.append(record)
+
+    reference: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in records:
+        group = (record["model"], record["defense"])
+        first = reference.setdefault(group, record)
+        differing = conditions.differences(conditions.of_record(first), conditions.of_record(record))
+        if differing:
+            raise MixedConditionsError(
+                f"Results for model {group[0]!r} (defense {group[1]!r}) were recorded under different "
+                f"conditions: {conditions.describe(differing)} "
+                f"({first['_source']} vs {record['_source']}). Analyse them separately, or record them "
+                "under different --label names if you want to compare them."
+            )
+
+    latest: dict[tuple, dict[str, Any]] = {}
+    for record in records:
+        key = (record["model"], record["defense"], record["case_id"], record["repeat"])
+        kept = latest.get(key)
+        order = (record.get("started_at") or "", record.get("content") or "")
+        if kept is None or order > (kept.get("started_at") or "", kept.get("content") or ""):
+            latest[key] = record
     return list(latest.values())
 
 
@@ -57,16 +93,6 @@ def judged_rows(records: Iterable[dict[str, Any]], cases: Iterable[dict[str, Any
         if case is None:
             continue  # recorded with a different dataset version
         verdict = judge(case, record.get("content"), record.get("finish_reason"))
-        request = record.get("request") or {}
-        settings = json.dumps(
-            {
-                "dataset": (record.get("dataset_sha256") or "")[:12],
-                "temperature": request.get("temperature"),
-                "max_tokens": request.get("max_tokens"),
-                "extra": request.get("extra") or {},
-            },
-            sort_keys=True, ensure_ascii=False,
-        )
         rows.append({
             "model": record["model"],
             "defense": record["defense"],
@@ -89,7 +115,6 @@ def judged_rows(records: Iterable[dict[str, Any]], cases: Iterable[dict[str, Any
             "reason": verdict.reason,
             # The final answer exactly as the judge saw it (reasoning removed).
             "content": strip_reasoning(record.get("content") or ""),
-            "settings": settings,
         })
     return rows
 
@@ -225,7 +250,6 @@ def summarize(rows: list[Row]) -> dict[str, Any]:
     benign = [r for r in valid if r["kind"] == "benign"]
     return {
         "generations": len(rows),
-        "settings": sorted({r["settings"] for r in rows if "settings" in r}),
         "invalid": len(rows) - len(valid),
         "attack_generations": len(attacks),
         "benign": {"n": len(benign), "contaminated": sum(not r["success"] for r in benign)},
@@ -308,11 +332,6 @@ def render_markdown(summaries: dict[tuple[str, str], dict[str, Any]]) -> str:
         out += [f"## {model} (defense profile: {defense})", ""]
         out += [
             f"- Generations: {s['generations']} ({s['invalid']} without a usable answer, excluded)",
-            *(
-                [f"- **Warning: these generations were recorded under {len(s['settings'])} different "
-                 "settings or dataset versions. The rates below mix them and should not be used.**"]
-                if len(s.get("settings", [])) > 1 else []
-            ),
             f"- Benign controls: {s['benign']['contaminated']} of {s['benign']['n']} contained a code that should not appear",
             f"- Judge labels on attack cases: {', '.join(f'{k} {v}' for k, v in sorted(s['labels'].items()))}",
             "",

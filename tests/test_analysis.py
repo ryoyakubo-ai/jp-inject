@@ -31,13 +31,70 @@ def test_every_generation_is_judged(rows):
     assert {"full", "partial", "mention", "none", "leak"} <= labels
 
 
-def test_duplicate_records_keep_the_latest(results, tmp_path):
+def test_rerun_of_the_same_generation_keeps_the_most_recent(results, tmp_path):
     first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
     extra = tmp_path / "again.jsonl"
-    extra.write_text(json.dumps({**first, "content": "REPLACED"}) + "\n", encoding="utf-8")
-    records = analysis.load_records([results, extra])
-    assert len(records) == 545 * 2
-    assert any(r["content"] == "REPLACED" for r in records)
+    newer = {**first, "content": "REPLACED", "started_at": "2099-01-01T00:00:00+00:00"}
+    extra.write_text(json.dumps(newer) + "\n", encoding="utf-8")
+    for order in ([results, extra], [extra, results]):  # the file order must not matter
+        records = analysis.load_records(order)
+        assert len(records) == 545 * 2
+        assert sum(r["content"] == "REPLACED" for r in records) == 1
+
+
+@pytest.mark.parametrize(
+    "change, word",
+    [
+        ({"request": {"temperature": 0.2}}, "temperature"),
+        ({"request": {"max_tokens": 64}}, "max_tokens"),
+        ({"request": {"seed": 7}}, "seed"),
+        ({"request": {"extra": {"top_p": 0.5}}}, "extra"),
+        ({"model_id": "another-file"}, "model_id"),
+        ({"base_url": "http://127.0.0.1:9/v1"}, "base_url"),
+        ({"model_fingerprint": {"id": "fake", "quantization": "Q8"}}, "model_fingerprint"),
+        ({"dataset_sha256": "0" * 64}, "dataset_sha256"),
+    ],
+)
+def test_results_from_different_conditions_are_refused(results, tmp_path, change, word):
+    first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
+    other = {**first, **{k: v for k, v in change.items() if k != "request"}}
+    other["request"] = {**first["request"], **change.get("request", {})}
+    # A different generation, so nothing overlaps: mixing must still be caught.
+    other["repeat"] = 99
+    if "seed" not in change.get("request", {}):
+        other["request"]["seed"] = first["request"]["seed"] + 99
+    extra = tmp_path / "other.jsonl"
+    extra.write_text(json.dumps(other) + "\n", encoding="utf-8")
+    for order in ([results, extra], [extra, results]):
+        with pytest.raises(analysis.MixedConditionsError, match=word):
+            analysis.load_records(order)
+
+
+def test_same_generation_under_two_temperatures_is_refused_in_either_order(results, tmp_path):
+    first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
+    other = {**first, "request": {**first["request"], "temperature": 0.2}}
+    extra = tmp_path / "other.jsonl"
+    extra.write_text(json.dumps(other) + "\n", encoding="utf-8")
+    for order in ([results, extra], [extra, results]):
+        with pytest.raises(analysis.MixedConditionsError, match="temperature"):
+            analysis.load_records(order)
+
+
+def test_different_labels_may_differ_in_condition(results, tmp_path):
+    first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
+    other = {**first, "model": "fake-cold", "request": {**first["request"], "temperature": 0.2}}
+    extra = tmp_path / "other.jsonl"
+    extra.write_text(json.dumps(other) + "\n", encoding="utf-8")
+    assert len(analysis.load_records([results, extra])) == 545 * 2 + 1
+
+
+def test_cli_reports_mixed_conditions(results, tmp_path):
+    first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
+    other = {**first, "repeat": 99, "request": {**first["request"], "temperature": 0.2, "seed": 99}}
+    extra = tmp_path / "other.jsonl"
+    extra.write_text(json.dumps(other) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="different conditions"):
+        cli.main(["report", str(results), str(extra), "--out", str(tmp_path / "r")])
 
 
 def test_summary_structure(rows):
@@ -172,6 +229,13 @@ def test_cli_set_adds_request_fields(tmp_path, capsys):
     assert cli.main(["run", "--model", "x", "--out", str(tmp_path / "o.jsonl"), "--dry-run", "--set", "oops"]) == 2
 
 
+@pytest.mark.parametrize("field", ["temperature=0.2", "seed=42", "max_tokens=10", "model=y", "stream=true"])
+def test_cli_refuses_set_for_fields_with_their_own_option(tmp_path, capsys, field):
+    code = cli.main(["run", "--model", "x", "--out", str(tmp_path / "o.jsonl"), "--dry-run", "--set", field])
+    assert code == 2
+    assert "dedicated option" in capsys.readouterr().err
+
+
 def test_japanese_vs_english_columns_use_the_same_base_attacks(rows):
     # Drop the English counterpart for half of the base attacks. The three
     # columns must still describe the same set of attacks: JA - EN == JA change - EN change.
@@ -184,12 +248,6 @@ def test_japanese_vs_english_columns_use_the_same_base_attacks(rows):
     assert math.isclose(keigo["difference"], keigo["ja_change"] - keigo["en_change"], abs_tol=1e-9)
     for i in analysis.summarize(rows)["interactions"]:
         assert math.isclose(i["difference"], i["ja_change"] - i["en_change"], abs_tol=1e-9)
-
-
-def test_report_warns_when_settings_are_mixed(rows):
-    assert "Warning" not in analysis.render_markdown(analysis.summarize_all(rows))
-    altered = [dict(r, settings=r["settings"].replace("0.7", "0.2")) if i % 2 else r for i, r in enumerate(rows)]
-    assert "recorded under 2 different settings" in analysis.render_markdown(analysis.summarize_all(altered))
 
 
 def test_sheet_shows_the_answer_the_judge_saw(tmp_path):

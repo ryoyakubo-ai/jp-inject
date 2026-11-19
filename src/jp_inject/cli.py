@@ -131,12 +131,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             extra[key] = json.loads(value)
         except json.JSONDecodeError:
             extra[key] = value
-    config = runner.RunConfig(
-        model=args.model, out=Path(args.out), base_url=args.base_url, label=args.label,
-        repeats=args.repeats, temperature=args.temperature, max_tokens=args.max_tokens,
-        seed=args.seed, defense=args.defense, timeout=args.timeout, retries=args.retries,
-        extra=extra, allow_remote=args.allow_remote,
-    )
+    try:
+        config = runner.RunConfig(
+            model=args.model, out=Path(args.out), base_url=args.base_url, label=args.label,
+            repeats=args.repeats, temperature=args.temperature, max_tokens=args.max_tokens,
+            seed=args.seed, defense=args.defense, timeout=args.timeout, retries=args.retries,
+            extra=extra, allow_remote=args.allow_remote,
+        )
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     if args.dry_run:
         print(f"would send {len(cases)} cases x {config.repeats} repeats to {config.base_url}")
         if cases:
@@ -165,7 +169,10 @@ def _rows(paths: Sequence[str]) -> list[dict[str, Any]]:
     missing = [str(f) for f in files if not f.is_file()]
     if missing or not files:
         raise SystemExit(f"result file(s) not found: {', '.join(missing) or ', '.join(paths)}")
-    return analysis.judged_rows(analysis.load_records(files))
+    try:
+        return analysis.judged_rows(analysis.load_records(files))
+    except analysis.MixedConditionsError as error:
+        raise SystemExit(str(error)) from error
 
 
 def cmd_judge(args: argparse.Namespace) -> int:
