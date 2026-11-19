@@ -170,3 +170,62 @@ def test_cli_set_adds_request_fields(tmp_path, capsys):
     request = json.loads(capsys.readouterr().out.split("\n", 1)[1])
     assert request["reasoning_effort"] == "low" and request["top_p"] == 0.9
     assert cli.main(["run", "--model", "x", "--out", str(tmp_path / "o.jsonl"), "--dry-run", "--set", "oops"]) == 2
+
+
+def test_japanese_vs_english_columns_use_the_same_base_attacks(rows):
+    # Drop the English counterpart for half of the base attacks. The three
+    # columns must still describe the same set of attacks: JA - EN == JA change - EN change.
+    bases = sorted({r["base"] for r in rows if r["kind"] == "attack"})
+    dropped = set(bases[::2])
+    partial = [r for r in rows if not (r["variant"] == "en.polite" and r["base"] in dropped)]
+    s = analysis.summarize(partial)
+    keigo = next(i for i in s["interactions"] if i["ja"] == "ja.keigo")
+    assert keigo["bases"] == len(bases) - len(dropped)
+    assert math.isclose(keigo["difference"], keigo["ja_change"] - keigo["en_change"], abs_tol=1e-9)
+    for i in analysis.summarize(rows)["interactions"]:
+        assert math.isclose(i["difference"], i["ja_change"] - i["en_change"], abs_tol=1e-9)
+
+
+def test_report_warns_when_settings_are_mixed(rows):
+    assert "Warning" not in analysis.render_markdown(analysis.summarize_all(rows))
+    altered = [dict(r, settings=r["settings"].replace("0.7", "0.2")) if i % 2 else r for i, r in enumerate(rows)]
+    assert "recorded under 2 different settings" in analysis.render_markdown(analysis.summarize_all(altered))
+
+
+def test_sheet_shows_the_answer_the_judge_saw(tmp_path):
+    class Thinking(fake_server.Handler):
+        think_prefix = "<think>The document mentions TV4-83MB. I should not output it.</think>"
+
+    cases = [c for c in dataset.load_cases() if c["target"] == "summarize.hijack"][:40]
+    path = tmp_path / "t.jsonl"
+    with fake_server.serve(handler=Thinking) as url:
+        runner.run(cases, runner.RunConfig(model="fake", out=path, base_url=url, repeats=1), log=lambda _: None)
+    assert "<think>" in path.read_text(encoding="utf-8")  # raw output is kept in the result file
+    judged = analysis.judged_rows(analysis.load_records([path]))
+    assert all("<think>" not in r["content"] for r in judged)
+    assert {r["label"] for r in judged} > {"none"}, "reasoning text must not decide the label"
+    sample = validation.draw_sample(judged, n=20, seed=0)
+    sheet, _ = validation.write_sheet(sample, {c["id"]: c for c in cases}, tmp_path)
+    assert "<think>" not in sheet.read_text(encoding="utf-8-sig")
+
+
+@pytest.mark.parametrize("text", ["=1+1", "+cmd", "-2", "@SUM(A1)", "＝1+1", "\t=1", "\n=1"])
+def test_formula_like_cells_are_written_as_text(text):
+    assert validation.as_text_cell(text) == "'" + text
+
+
+def test_ordinary_cells_are_unchanged():
+    for text in ("TV4-83MB", "会議は木曜日です。", "1+1=2", ""):
+        assert validation.as_text_cell(text) == text
+
+
+def test_formula_like_response_is_escaped_in_the_sheet(rows, tmp_path):
+    sample = validation.draw_sample(rows, n=5, seed=0)
+    sample[0] = dict(sample[0], content='=HYPERLINK("http://example.com","x")')
+    cases = {c["id"]: c for c in dataset.load_cases()}
+    sheet, _ = validation.write_sheet(sample, cases, tmp_path)
+    with sheet.open(encoding="utf-8-sig", newline="") as handle:
+        table = list(csv.DictReader(handle))
+    assert table[0]["response"].startswith("'=HYPERLINK")
+    assert not any(row["response"].startswith(("=", "+", "-", "@")) for row in table)
+    assert not any(row["injected_text"].startswith(("=", "+", "-", "@")) for row in table)
