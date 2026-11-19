@@ -157,7 +157,9 @@ handful of quantised local models cannot support claims about which vendor is
 
 - Run it against systems you own or are explicitly allowed to test. The runner
   refuses non-local endpoints unless you pass `--allow-remote`; many hosted APIs
-  require prior permission for injection testing.
+  require prior permission for injection testing. It never follows HTTP
+  redirects, so prompts and an API key (`JP_INJECT_API_KEY`, optional) go only
+  to the address you configured.
 - The payloads are deliberately benign. Please keep contributions that way:
   success must be shown by a harmless token, never by harmful output.
 - Found a real vulnerability in someone's product while using this? Report it
