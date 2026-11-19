@@ -33,11 +33,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from . import __version__
+from . import __version__, conditions
 from .dataset import case_system, dataset_sha256
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"  # LM Studio's default
 API_KEY_ENV = "JP_INJECT_API_KEY"
+
+# Request fields that have their own option. They may not be passed through
+# ``extra``: a value set there would bypass the option and the bookkeeping
+# that keeps a result file to one condition.
+RESERVED_REQUEST_FIELDS = ("model", "messages", "temperature", "max_tokens", "seed", "stream")
 
 
 class RemoteEndpointError(ValueError):
@@ -88,6 +93,14 @@ class RunConfig:
     retries: int = 3
     extra: dict[str, Any] = field(default_factory=dict)
     allow_remote: bool = False
+
+    def __post_init__(self) -> None:
+        reserved = sorted(set(self.extra) & set(RESERVED_REQUEST_FIELDS))
+        if reserved:
+            raise ValueError(
+                f"{', '.join(reserved)} cannot be set as an extra request field; "
+                "use the dedicated option (--temperature, --max-tokens, --seed, --model)."
+            )
 
     @property
     def model_label(self) -> str:
@@ -206,11 +219,13 @@ def repair_tail(path: Path) -> str:
     return "newline_added"
 
 
-def _signature(config: RunConfig) -> dict[str, Any]:
-    """Everything that defines the experimental condition of a generation."""
+def _condition(config: RunConfig, model_fingerprint: dict[str, Any] | None) -> dict[str, Any]:
+    """The condition this run would record (same shape as conditions.of_record)."""
     return {
         "dataset_sha256": dataset_sha256(),
+        "base_url": conditions.normalize_base_url(config.base_url),
         "model_id": config.model,
+        "model_fingerprint": model_fingerprint,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
         "seed": config.seed,
@@ -218,39 +233,21 @@ def _signature(config: RunConfig) -> dict[str, Any]:
     }
 
 
-def _recorded_signature(record: dict[str, Any]) -> dict[str, Any]:
-    request = record.get("request") or {}
-    seed = request.get("seed")
-    return {
-        "dataset_sha256": record.get("dataset_sha256"),
-        "model_id": record.get("model_id"),
-        "temperature": request.get("temperature"),
-        "max_tokens": request.get("max_tokens"),
-        "seed": None if seed is None else seed - record.get("repeat", 0),
-        "extra": request.get("extra") or {},
-    }
-
-
-def check_settings(path: Path, config: RunConfig) -> None:
-    """Refuse to continue a result file recorded under other settings."""
-    wanted = _signature(config)
+def check_settings(
+    path: Path, config: RunConfig, model_fingerprint: dict[str, Any] | None = None
+) -> None:
+    """Refuse to continue a result file recorded under another condition."""
+    wanted = _condition(config, model_fingerprint)
     for record in _read_records(path):
         if record.get("model") != config.model_label or record.get("defense") != config.defense:
             continue
-        found = _recorded_signature(record)
-        differing = {
-            key: (found[key], wanted[key])
-            for key in wanted
-            if found[key] != wanted[key]
-            and not (key == "model_id" and found[key] is None)  # files from before 0.1.0
-        }
+        differing = conditions.differences(conditions.of_record(record), wanted)
         if differing:
-            details = "; ".join(f"{k}: recorded {a!r}, now {b!r}" for k, (a, b) in sorted(differing.items()))
             raise SettingsMismatchError(
                 f"{path} already holds generations for model {config.model_label!r} "
-                f"(defense {config.defense!r}) recorded under different settings ({details}). "
-                "Mixing them would make the results meaningless. Use a different --out file "
-                "or a different --label."
+                f"(defense {config.defense!r}) recorded under a different condition "
+                f"(recorded vs now: {conditions.describe(differing)}). Mixing them would make "
+                "the results meaningless. Use a different --out file or a different --label."
             )
 
 
@@ -268,9 +265,7 @@ def _model_info(
         return None  # not LM Studio, or an older version: simply not available
 
 
-def _write_meta(
-    opener: urllib.request.OpenerDirector, config: RunConfig, api_key: str | None, planned: int
-) -> None:
+def _write_meta(config: RunConfig, model_info: dict[str, Any] | None, planned: int) -> None:
     meta_path = config.out.with_suffix(config.out.suffix + ".meta.json")
     runs: list[dict[str, Any]] = []
     if meta_path.exists():
@@ -294,7 +289,7 @@ def _write_meta(
         "planned_generations": planned,
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "model_info": _model_info(opener, config, api_key),
+        "model_info": model_info,
     })
     meta_path.write_text(
         json.dumps({"invocations": runs}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -335,7 +330,9 @@ def run(
     repaired = repair_tail(config.out)
     if repaired == "fragment_removed":
         log(f"removed an incomplete last line from {config.out} (left by an interrupted run)")
-    check_settings(config.out, config)
+    model_info = _model_info(opener, config, api_key)
+    model_fingerprint = conditions.fingerprint(model_info)
+    check_settings(config.out, config, model_fingerprint)
     already = done_keys(config.out)
     todo = [
         (repeat, case)
@@ -349,7 +346,8 @@ def run(
     if not todo:
         return counts
 
-    _write_meta(opener, config, api_key, len(todo))
+    _write_meta(config, model_info, len(todo))
+    base_url = conditions.normalize_base_url(config.base_url)
     url = config.base_url.rstrip("/") + "/chat/completions"
     sha = dataset_sha256()
     started = time.monotonic()
@@ -377,6 +375,8 @@ def run(
                 "defense": config.defense,
                 "model": config.model_label,
                 "model_id": config.model,
+                "base_url": base_url,
+                "model_fingerprint": model_fingerprint,
                 **result,
                 "request": {
                     "temperature": body["temperature"],

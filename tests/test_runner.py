@@ -202,3 +202,54 @@ def test_other_models_and_defenses_may_share_a_file(few_cases, tmp_path):
         runner.run(few_cases[:2], _config(url, tmp_path, repeats=1, label="second", max_tokens=99),
                    log=lambda _: None)
     assert len(_read(tmp_path / "out.jsonl")) == 6
+
+
+def test_reserved_fields_cannot_be_passed_as_extra(tmp_path):
+    for key in runner.RESERVED_REQUEST_FIELDS:
+        with pytest.raises(ValueError, match="dedicated option"):
+            runner.RunConfig(model="m", out=tmp_path / "o.jsonl", extra={key: 1})
+
+
+def test_same_command_resumes_with_options_and_extra_fields(few_cases, tmp_path):
+    # Whatever was passed the first time, passing it again must resume, not be refused.
+    settings = dict(repeats=1, temperature=0.2, seed=42, max_tokens=64, extra={"top_p": 0.9})
+    with fake_server.serve() as url:
+        runner.run(few_cases[:2], _config(url, tmp_path, **settings), log=lambda _: None)
+        counts = runner.run(few_cases, _config(url, tmp_path, **settings), log=lambda _: None)
+    assert counts["skipped"] == 2 and counts["done"] == 4
+    records = _read(tmp_path / "out.jsonl")
+    assert {r["request"]["temperature"] for r in records} == {0.2}
+    assert {r["request"]["seed"] for r in records} == {42}
+
+
+def test_resuming_against_another_server_is_refused(few_cases, tmp_path):
+    class Other(fake_server.Handler):
+        pass
+
+    with fake_server.serve() as url:
+        runner.run(few_cases[:2], _config(url, tmp_path, repeats=1), log=lambda _: None)
+        with fake_server.serve(handler=Other) as elsewhere:
+            with pytest.raises(runner.SettingsMismatchError, match="base_url"):
+                runner.run(few_cases, _config(elsewhere, tmp_path, repeats=1), log=lambda _: None)
+            assert Other.requests_seen == []  # nothing was generated on the other server
+
+
+def test_resuming_after_the_server_swapped_the_model_file_is_refused(few_cases, tmp_path):
+    with fake_server.serve() as url:
+        runner.run(few_cases[:2], _config(url, tmp_path, repeats=1), log=lambda _: None)
+        fake_server.Handler.quantization = "Q8_OTHER"  # same id, different file
+        try:
+            with pytest.raises(runner.SettingsMismatchError, match="model_fingerprint"):
+                runner.run(few_cases, _config(url, tmp_path, repeats=1), log=lambda _: None)
+        finally:
+            fake_server.Handler.quantization = "Q0_FAKE"
+
+
+def test_records_carry_the_full_condition(few_cases, tmp_path):
+    with fake_server.serve() as url:
+        runner.run(few_cases[:1], _config(url, tmp_path, repeats=1), log=lambda _: None)
+        record = _read(tmp_path / "out.jsonl")[0]
+        assert record["base_url"] == url
+    assert record["model_id"] == "fake"
+    # volatile metadata (load state, context length) is not part of the fingerprint
+    assert record["model_fingerprint"] == {"id": "fake", "arch": "none", "quantization": "Q0_FAKE"}
