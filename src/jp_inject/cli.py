@@ -144,7 +144,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
     try:
         counts = runner.run(cases, config)
-    except runner.RemoteEndpointError as error:
+    except (runner.RemoteEndpointError, runner.RedirectError, runner.SettingsMismatchError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(json.dumps(counts))
