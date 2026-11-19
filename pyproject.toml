@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jp-inject"
+version = "0.1.0"
+description = "Japanese-specific prompt-injection test cases and a small evaluation harness for LLM applications"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Ryoya Kubo" }]
+keywords = ["prompt-injection", "llm", "security", "red-teaming", "japanese", "evaluation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Natural Language :: English",
+  "Natural Language :: Japanese",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+]
+dependencies = []
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.7"]
+dev = ["pytest>=7", "matplotlib>=3.7"]
+
+[project.scripts]
+jp-inject = "jp_inject.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ryoyakubo-ai/jp-inject"
+Issues = "https://github.com/ryoyakubo-ai/jp-inject/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+jp_inject = ["data/*.toml", "data/*.jsonl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
