@@ -136,7 +136,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             model=args.model, out=Path(args.out), base_url=args.base_url, label=args.label,
             repeats=args.repeats, temperature=args.temperature, max_tokens=args.max_tokens,
             seed=args.seed, defense=args.defense, timeout=args.timeout, retries=args.retries,
-            extra=extra, allow_remote=args.allow_remote,
+            extra=extra, allow_remote=args.allow_remote, concurrency=args.concurrency,
         )
     except ValueError as error:
         print(str(error), file=sys.stderr)
@@ -256,6 +256,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="basic: system prompts include one defensive sentence; none: they do not")
     p.add_argument("--timeout", type=float, default=600.0)
     p.add_argument("--retries", type=int, default=3)
+    p.add_argument("--concurrency", type=int, default=1,
+                   help="requests in flight at once (default 1). Useful when the server decodes in "
+                        "parallel, e.g. LM Studio's 'Max Concurrent Predictions'")
     p.add_argument("--set", action="append", metavar="KEY=VALUE",
                    help="extra field for each request, e.g. --set reasoning_effort=low (repeatable)")
     p.add_argument("--extra", help="extra fields as one JSON object (quoting is awkward in PowerShell; prefer --set)")

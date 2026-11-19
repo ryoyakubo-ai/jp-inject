@@ -109,6 +109,8 @@ starts a pretend model that lets you try the whole pipeline.
 Useful options: `--defense none` removes the one defensive sentence from the
 system prompts; `--variant`, `--target`, `--family`, `--kind` select subsets;
 `--set reasoning_effort=low` passes extra fields to the server;
+`--concurrency 4` keeps several requests in flight for servers that decode in
+parallel (LM Studio: *Max Concurrent Predictions*);
 `--dry-run` shows the first request without sending anything.
 
 ### Use the transforms on your own text

@@ -253,3 +253,44 @@ def test_records_carry_the_full_condition(few_cases, tmp_path):
     assert record["model_id"] == "fake"
     # volatile metadata (load state, context length) is not part of the fingerprint
     assert record["model_fingerprint"] == {"id": "fake", "arch": "none", "quantization": "Q0_FAKE"}
+
+
+def test_concurrent_run_records_the_same_generations(tmp_path):
+    cases = dataset.load_cases()[:40]
+    with fake_server.serve() as url:
+        one = runner.RunConfig(model="fake", out=tmp_path / "one.jsonl", base_url=url, repeats=2)
+        four = runner.RunConfig(model="fake", out=tmp_path / "four.jsonl", base_url=url, repeats=2, concurrency=4)
+        assert runner.run(cases, one, log=lambda _: None)["done"] == 80
+        assert runner.run(cases, four, log=lambda _: None)["done"] == 80
+    def keyed(path):
+        return {(r["case_id"], r["repeat"]): r["content"] for r in _read(path)}
+    assert keyed(tmp_path / "one.jsonl") == keyed(tmp_path / "four.jsonl")
+    repeats = [r["repeat"] for r in _read(tmp_path / "four.jsonl")]
+    assert repeats == sorted(repeats), "passes must not interleave"
+    meta = json.loads((tmp_path / "four.jsonl.meta.json").read_text(encoding="utf-8"))
+    assert meta["invocations"][0]["concurrency"] == 4
+
+
+def test_concurrent_run_resumes_and_counts_failures(few_cases, tmp_path):
+    with fake_server.serve() as url:
+        config = _config(url, tmp_path, repeats=1, concurrency=3, retries=1)
+        fake_server.Handler.fail_first = 2
+        counts = runner.run(few_cases, config, log=lambda _: None, sleep=lambda _: None)
+        assert counts["failed"] == 2 and counts["done"] == 4
+        again = runner.run(few_cases, config, log=lambda _: None, sleep=lambda _: None)
+    assert again["skipped"] == 4 and again["done"] == 2
+    assert len(_read(tmp_path / "out.jsonl")) == 6
+
+
+def test_concurrent_run_stops_on_redirect(few_cases, tmp_path):
+    class Redirecting(fake_server.Handler):
+        redirect_to = "http://127.0.0.1:9/elsewhere"
+
+    with fake_server.serve(handler=Redirecting) as url:
+        with pytest.raises(runner.RedirectError):
+            runner.run(few_cases, _config(url, tmp_path, repeats=1, concurrency=4), log=lambda _: None)
+
+
+def test_concurrency_must_be_positive(tmp_path):
+    with pytest.raises(ValueError, match="concurrency"):
+        runner.RunConfig(model="m", out=tmp_path / "o.jsonl", concurrency=0)

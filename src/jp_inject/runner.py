@@ -6,7 +6,9 @@ llama.cpp server, vLLM). Only the standard library is used.
 * Results are appended to a JSON Lines file, one generation per line, and
   flushed immediately, so a run can be interrupted and resumed at any time.
 * Work is done pass by pass (every case once, then every case a second time,
-  ...), so stopping early still leaves balanced data.
+  ...), so stopping early still leaves balanced data. Within a pass, several
+  requests can be in flight at once (``concurrency``) for servers that decode
+  in parallel.
 * By default only loopback and private addresses are accepted. Sending
   injection tests to a hosted API usually needs the provider's permission;
   pass ``allow_remote=True`` only when you have it.
@@ -28,6 +30,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,8 +96,11 @@ class RunConfig:
     retries: int = 3
     extra: dict[str, Any] = field(default_factory=dict)
     allow_remote: bool = False
+    concurrency: int = 1  # requests in flight at once; match the server's parallel slots
 
     def __post_init__(self) -> None:
+        if self.concurrency < 1:
+            raise ValueError("concurrency must be at least 1")
         reserved = sorted(set(self.extra) & set(RESERVED_REQUEST_FIELDS))
         if reserved:
             raise ValueError(
@@ -287,6 +293,7 @@ def _write_meta(config: RunConfig, model_info: dict[str, Any] | None, planned: i
         "seed": config.seed,
         "extra": config.extra,
         "planned_generations": planned,
+        "concurrency": config.concurrency,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "model_info": model_info,
@@ -352,51 +359,70 @@ def run(
     sha = dataset_sha256()
     started = time.monotonic()
 
+    def generate(repeat: int, case: dict[str, Any]) -> dict[str, Any] | None:
+        """One generation, with retries. Runs in a worker thread."""
+        body = build_request(case, config, repeat)
+        began_at, began = _now(), time.monotonic()
+        result = None
+        for attempt in range(1, config.retries + 1):
+            try:
+                result = _extract(_post_json(opener, url, body, config.timeout, api_key))
+                break
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
+                log(f"  attempt {attempt}/{config.retries} failed for {case['id']}: {error}")
+                if attempt < config.retries:
+                    sleep(min(30.0, 2.0 ** attempt))
+        if result is None:
+            return None
+        return {
+            "case_id": case["id"],
+            "repeat": repeat,
+            "defense": config.defense,
+            "model": config.model_label,
+            "model_id": config.model,
+            "base_url": base_url,
+            "model_fingerprint": model_fingerprint,
+            **result,
+            "request": {
+                "temperature": body["temperature"],
+                "max_tokens": body["max_tokens"],
+                "seed": body["seed"],
+                "extra": config.extra,
+            },
+            "elapsed_s": round(time.monotonic() - began, 3),
+            "started_at": began_at,
+            "jp_inject_version": __version__,
+            "dataset_sha256": sha,
+        }
+
+    # One pass at a time, so that stopping early leaves balanced data. Within a
+    # pass, up to ``concurrency`` requests are in flight; only this thread
+    # writes to the result file.
+    passes: dict[int, list[dict[str, Any]]] = {}
+    for repeat, case in todo:
+        passes.setdefault(repeat, []).append(case)
+    finished = 0
     with config.out.open("a", encoding="utf-8", newline="\n") as handle:
-        for index, (repeat, case) in enumerate(todo, start=1):
-            body = build_request(case, config, repeat)
-            began_at, began = _now(), time.monotonic()
-            result = None
-            for attempt in range(1, config.retries + 1):
-                try:
-                    result = _extract(_post_json(opener, url, body, config.timeout, api_key))
-                    break
-                except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
-                    log(f"  attempt {attempt}/{config.retries} failed for {case['id']}: {error}")
-                    if attempt < config.retries:
-                        sleep(min(30.0, 2.0 ** attempt))
-            if result is None:
-                counts["failed"] += 1
-                continue
-
-            record = {
-                "case_id": case["id"],
-                "repeat": repeat,
-                "defense": config.defense,
-                "model": config.model_label,
-                "model_id": config.model,
-                "base_url": base_url,
-                "model_fingerprint": model_fingerprint,
-                **result,
-                "request": {
-                    "temperature": body["temperature"],
-                    "max_tokens": body["max_tokens"],
-                    "seed": body["seed"],
-                    "extra": config.extra,
-                },
-                "elapsed_s": round(time.monotonic() - began, 3),
-                "started_at": began_at,
-                "jp_inject_version": __version__,
-                "dataset_sha256": sha,
-            }
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            handle.flush()
-            counts["done"] += 1
-
-            if index % 25 == 0 or index == len(todo):
-                elapsed = time.monotonic() - started
-                remaining = elapsed / index * (len(todo) - index)
-                log(f"  {index}/{len(todo)} done, about {remaining / 60:.0f} min left")
+        for repeat, pass_cases in passes.items():
+            executor = ThreadPoolExecutor(max_workers=config.concurrency)
+            try:
+                futures = [executor.submit(generate, repeat, case) for case in pass_cases]
+                for future in as_completed(futures):
+                    record = future.result()  # re-raises RedirectError and other fatal errors
+                    finished += 1
+                    if record is None:
+                        counts["failed"] += 1
+                    else:
+                        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        handle.flush()
+                        counts["done"] += 1
+                    if finished % 25 == 0 or finished == len(todo):
+                        elapsed = time.monotonic() - started
+                        remaining = elapsed / finished * (len(todo) - finished)
+                        log(f"  {finished}/{len(todo)} done, about {remaining / 60:.0f} min left")
+            finally:
+                # On an error or Ctrl+C, do not start the requests still queued.
+                executor.shutdown(wait=True, cancel_futures=True)
 
     if counts["failed"]:
         log(f"{counts['failed']} generations failed; run the same command again to retry them")
