@@ -227,11 +227,20 @@ tests/                   unit tests and an end-to-end run against a fake model
 
 ## Roadmap
 
-1. Publish measurements on several openly available models, with the judge
-   validation and a written report (findings, severity, mitigations).
-2. Measure how often open prompt-injection detectors miss each technique.
-3. Offer the orthographic transforms to garak as buffs, and export the cases
-   for promptfoo.
+Done in v0.1: measurements on two openly available models with judge
+validation and a written report, and detection rates of two open
+prompt-injection detectors ([docs/report.md](docs/report.md)).
+
+Next:
+
+1. Offer garak the two additions the measurements support: a buff that
+   rewrites text in full-width forms (it got past both detectors here), and a
+   Japanese target for its latent-injection translation probes. The kana,
+   romaji and old-style kanji transforms are not proposed: the data gave no
+   case for them.
+2. More models, including at least one larger or hosted model, and a run
+   without the defensive sentence (`--defense none`).
+3. An export of the cases for promptfoo.
 
 ## License
 

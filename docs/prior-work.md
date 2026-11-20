@@ -80,10 +80,13 @@ broad scanning. Overlap was checked against its reference documentation:
 
 So the kana/romaji/half-width/kyujitai/look-alike transforms and the
 register and framing variants are, as far as this check found, not available
-in garak. The orthographic transforms map naturally onto garak's buff
-interface, and offering them upstream is on the roadmap. A community package
-of Turkish-specific probes for garak (`garak-multilingual`) is a precedent
-for language-specific additions.
+in garak, and neither is a full-width transform. The transforms have the same
+shape as garak's buffs. garak loads plugins only from its own package, so a
+transform is usable there only once it is accepted upstream. After the
+measurements, only the full-width transform has a case for that (see the
+report and the README roadmap). A community package of Turkish-specific probes
+for garak (`garak-multilingual`) is a precedent for language-specific
+additions.
 
 garak describes itself as a discovery tool rather than a benchmark. jp-inject
 is narrower and makes the opposite trade: few attacks, a controlled design,
