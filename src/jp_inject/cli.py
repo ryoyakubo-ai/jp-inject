@@ -221,7 +221,11 @@ def cmd_detect(args: argparse.Namespace) -> int:
     def loader(model_id: str):
         return detect.load_hf_detector(model_id, device=args.device, batch_size=args.batch_size)
 
-    result = detect.score_cases(detectors, Path(args.out), cases=_select(dataset.load_cases(), args), loader=loader)
+    try:
+        result = detect.score_cases(detectors, Path(args.out), cases=_select(dataset.load_cases(), args), loader=loader)
+    except detect.NothingToScore as exc:
+        print(exc, file=sys.stderr)
+        return 2
     print(f"scored: {', '.join(result['scored']) or 'none'}")
     for item in result["skipped"]:
         print(f"skipped: {item['detector']}: {item['reason']}")

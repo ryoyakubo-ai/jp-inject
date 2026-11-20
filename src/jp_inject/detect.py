@@ -63,6 +63,10 @@ class DetectorUnavailable(RuntimeError):
     """The detector could not be loaded (not installed, gated, no network)."""
 
 
+class NothingToScore(ValueError):
+    """The request selects no cases, or is ambiguous about which detector is meant."""
+
+
 def benign_index(id2label: dict[int, str]) -> int:
     """Index of the class that means "not an attack" (0 if no name says so)."""
     for index, name in sorted(id2label.items()):
@@ -220,6 +224,19 @@ def score_cases(
     touched. Results of detectors not named in this call are kept.
     """
     cases = list(cases) if cases is not None else load_cases()
+    if not cases:
+        # Nothing would be scored, and replacing a detector's results with
+        # nothing would delete them (e.g. after a typo in --variant).
+        raise NothingToScore("no test cases selected; nothing was scored and the score file was not changed")
+    names = [split_revision(detector)[0] for detector in detectors]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        # Score rows are keyed by detector name, so two versions of one
+        # detector in a single file could not be told apart.
+        raise NothingToScore(
+            f"{', '.join(repeated)} is named more than once; score one version per file "
+            "(use a different --out for another version)"
+        )
     loader = loader or load_hf_detector
     sha = dataset_sha256()
     out = Path(out)

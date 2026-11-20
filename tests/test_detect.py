@@ -211,3 +211,30 @@ def test_report_files_and_cli(scores, tmp_path, capsys):
     assert "`ja.katakana`" in text
     assert (tmp_path / "report" / "detectors.csv").read_text(encoding="utf-8").startswith("detector,threshold,view")
     json.loads((tmp_path / "report" / "summary.json").read_text(encoding="utf-8"))
+
+
+def test_an_empty_selection_changes_nothing(scores, tmp_path, capsys):
+    # Reported in review: a selection with no cases (a typo in --variant)
+    # counted as a successful re-score and emptied the file.
+    out, _ = scores
+    before = out.read_bytes()
+    with pytest.raises(detect.NothingToScore):
+        detect.score_cases(["fake/keyword"], out, cases=[], loader=keyword_loader, log=lambda m: None)
+    assert out.read_bytes() == before
+    meta = out.with_name(out.name + ".meta.json")
+    meta_before = meta.read_bytes()
+    assert cli.main(["detect", "--out", str(out), "--variant", "ja.no-such-variant"]) == 2
+    assert "no test cases selected" in capsys.readouterr().err
+    assert out.read_bytes() == before and meta.read_bytes() == meta_before
+
+
+def test_two_versions_of_one_detector_in_one_call_are_refused(scores):
+    # Reported in review: both versions were stored under the same name, and
+    # whichever came last silently won in the analysis.
+    out, _ = scores
+    before = out.read_bytes()
+    with pytest.raises(detect.NothingToScore, match="fake/keyword"):
+        detect.score_cases(["fake/keyword@a", "fake/keyword@b"], out, loader=keyword_loader, log=lambda m: None)
+    with pytest.raises(detect.NothingToScore):
+        detect.score_cases(["fake/keyword", "fake/keyword@b"], out, loader=keyword_loader, log=lambda m: None)
+    assert out.read_bytes() == before

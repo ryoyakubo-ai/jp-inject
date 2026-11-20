@@ -225,8 +225,12 @@ outright. Each model and defense profile is reported separately.
 
 A detector on the hub can change. The commit of the files that were loaded is
 written to `<scores>.meta.json`, and `--detector ID@COMMIT` loads a pinned
-version. Scoring a detector again replaces its earlier scores only after it
-succeeds; a detector that cannot be loaded keeps the scores it had.
+version. A score file holds one version per detector: scoring another version
+replaces the earlier scores, and the latest entry for that detector in
+`<scores>.meta.json` names the version in the file; naming two versions of one
+detector in a single call is refused. Scoring a detector again replaces its
+earlier scores only after it succeeds; a detector that cannot be loaded keeps
+the scores it had, and a selection that matches no cases changes nothing.
 
 ## Reporting
 
