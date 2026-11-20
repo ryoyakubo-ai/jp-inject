@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import conditions
-from .dataset import CROSS_ENV, VARIANT_BY_ID, VARIANTS, load_cases
+from .dataset import CROSS_ENV, VARIANT_BY_ID, VARIANTS, dataset_sha256, load_cases
 from .judge import judge, strip_reasoning
 from .stats import bootstrap_mean, cluster_bootstrap_rate, wilson
 
@@ -96,8 +96,32 @@ def load_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
     return list(latest.values())
 
 
+class DatasetMismatchError(ValueError):
+    """Results were recorded with a different version of the test cases."""
+
+
 def judged_rows(records: Iterable[dict[str, Any]], cases: Iterable[dict[str, Any]] | None = None) -> list[Row]:
-    """Join each record with its test case and judge it."""
+    """Join each record with its test case and judge it.
+
+    Judging uses the expected code of the *installed* test case. A response
+    recorded against another version of the test cases could therefore be
+    judged against the wrong expectation while its case id still matches, so
+    such records are refused. A record without a hash (written before hashes
+    were recorded) is accepted. Passing ``cases`` explicitly skips the check:
+    the caller then decides which cases the records belong to.
+    """
+    records = list(records)
+    if cases is None:
+        installed = dataset_sha256()
+        for record in records:
+            recorded = record.get("dataset_sha256")
+            if recorded is not None and recorded != installed:
+                raise DatasetMismatchError(
+                    f"{record.get('_source', 'a result file')}: recorded with test cases {recorded[:12]}…, "
+                    f"but the installed test cases are {installed[:12]}…. Judging would compare old "
+                    "responses with the current expected codes. Install the jp-inject version the "
+                    "results were recorded with, or run the measurement again."
+                )
     by_id = {c["id"]: c for c in (cases if cases is not None else load_cases())}
     rows: list[Row] = []
     for record in records:

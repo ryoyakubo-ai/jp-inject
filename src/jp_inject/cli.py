@@ -171,7 +171,7 @@ def _rows(paths: Sequence[str]) -> list[dict[str, Any]]:
         raise SystemExit(f"result file(s) not found: {', '.join(missing) or ', '.join(paths)}")
     try:
         return analysis.judged_rows(analysis.load_records(files))
-    except analysis.MixedConditionsError as error:
+    except (analysis.MixedConditionsError, analysis.DatasetMismatchError) as error:
         raise SystemExit(str(error)) from error
 
 

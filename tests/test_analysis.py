@@ -108,6 +108,31 @@ def test_unknown_field_in_one_record_does_not_hide_a_later_mismatch(results, tmp
     assert len(analysis.load_records([a, unknown])) == 2
 
 
+def test_results_from_another_dataset_version_are_not_judged(results, tmp_path):
+    # Reported in review: one file recorded with other test cases passed the
+    # between-file check (nothing to compare with) and was judged against the
+    # installed expectations, because the case ids still matched.
+    stale = tmp_path / "stale.jsonl"
+    lines = []
+    for line in results.read_text(encoding="utf-8").splitlines()[:20]:
+        record = json.loads(line)
+        record["dataset_sha256"] = "0" * 64
+        lines.append(json.dumps(record))
+    stale.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    records = analysis.load_records([stale])
+    with pytest.raises(analysis.DatasetMismatchError, match="000000000000"):
+        analysis.judged_rows(records)
+    # An explicit set of cases is the caller's responsibility.
+    assert len(analysis.judged_rows(records, cases=dataset.load_cases())) == 20
+    # Records written before hashes existed are still accepted.
+    for record in records:
+        record.pop("dataset_sha256")
+    assert len(analysis.judged_rows(records)) == 20
+    # The command line reports it instead of printing a table.
+    with pytest.raises(SystemExit, match="installed test cases"):
+        cli.main(["report", str(stale), "--out", str(tmp_path / "report")])
+
+
 def test_different_labels_may_differ_in_condition(results, tmp_path):
     first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
     other = {**first, "model": "fake-cold", "request": {**first["request"], "temperature": 0.2}}
