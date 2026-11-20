@@ -12,8 +12,11 @@ technique, how the attack success rate moves.
 日本語の概要は [README.ja.md](README.ja.md) にあります。
 
 > **Status: v0.1.** The test cases, transforms, runner, judge and analysis are
-> complete and tested. Measurements on real models have not been published yet;
-> when they are, they will be added under `results/` together with a written report.
+> complete and tested. The first measurement (two local models, 2,725
+> generations each) is in [docs/report.md](docs/report.md), with the raw
+> responses under `results/`. Short version: on these two models, no
+> Japanese-specific wording or re-spelling made injection more effective, and
+> most made it less effective.
 
 ## Why this exists
 
