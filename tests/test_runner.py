@@ -294,3 +294,32 @@ def test_concurrent_run_stops_on_redirect(few_cases, tmp_path):
 def test_concurrency_must_be_positive(tmp_path):
     with pytest.raises(ValueError, match="concurrency"):
         runner.RunConfig(model="m", out=tmp_path / "o.jsonl", concurrency=0)
+
+
+def test_normalised_run_sends_normalised_text_under_its_own_label(tmp_path):
+    cases = [c for c in dataset.load_cases() if c["variant"] == "en.fullwidth"][:2]
+    with fake_server.serve() as url:
+        config = _config(url, tmp_path, repeats=1, normalize="nfkc")
+        runner.run(cases, config, log=lambda _: None)
+        sent = list(fake_server.Handler.requests_seen)
+    by_user = {request["messages"][1]["content"] for request in sent[-2:]}
+    assert all("Ｉ" not in text and "\u3000" not in text for text in by_user)
+    records = _read(config.out)
+    assert {r["model"] for r in records} == {"fake+nfkc"}
+    assert {r["model_id"] for r in records} == {"fake"}
+    assert {r["input_normalization"] for r in records} == {"nfkc"}
+    meta = json.loads((tmp_path / "out.jsonl.meta.json").read_text(encoding="utf-8"))
+    assert meta["invocations"][0]["input_normalization"] == "nfkc"
+
+
+def test_a_plain_run_cannot_continue_a_normalised_file(few_cases, tmp_path):
+    with fake_server.serve() as url:
+        runner.run(few_cases, _config(url, tmp_path, repeats=1, normalize="nfkc", label="same"),
+                   log=lambda _: None)
+        with pytest.raises(runner.SettingsMismatchError, match="input_normalization"):
+            runner.run(few_cases, _config(url, tmp_path, repeats=1, label="same"), log=lambda _: None)
+
+
+def test_unknown_normalisation_level_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="normalisation"):
+        runner.RunConfig(model="fake", out=tmp_path / "out.jsonl", normalize="kana")

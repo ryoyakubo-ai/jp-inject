@@ -314,3 +314,38 @@ def test_guard_template_form_is_found_for_list_and_string_templates():
     assert detect.guard_content_form(_template("parts")) == "parts"
     assert detect.guard_content_form(_template("string")) == "string"
     assert detect.guard_content_form(_template("neither")) is None
+
+
+def test_normalisation_levels_add_views_and_identical_texts_are_scored_once(tmp_path):
+    calls = []
+
+    def counting_loader(model_id):
+        score, info = keyword_loader(model_id)
+
+        def counted(texts):
+            calls.extend(texts)
+            return score(texts)
+
+        return counted, info
+
+    cases = [c for c in dataset.load_cases() if c["variant"] in ("ja.plain", "ja.kyujitai", "en.fullwidth")]
+    out = tmp_path / "scores.jsonl"
+    detect.score_cases(["fake/keyword"], out, cases=cases, loader=counting_loader, log=lambda m: None,
+                       normalize=["fold", "nfkc"])
+    records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert {r["view"] for r in records} == {"message", "payload", "message_nfkc", "message_fold"}
+    assert len(calls) == len(set(calls)) < len(records)
+    by_key = {(r["case_id"], r["view"]): r["score"] for r in records}
+    # 無視 has no traditional form, so pick a case where folding changed the text.
+    old = next(c for c in cases if c["variant"] == "ja.kyujitai" and "無視" in c["user"]
+               and detect.case_views(c, normalize=["fold"])["message_fold"] != c["user"])["id"]
+    assert by_key[(old, "message_fold")] == 0.99
+
+
+def test_normalize_levels_accepts_the_old_flag_and_refuses_unknown_levels():
+    assert detect.normalize_levels(False) == ()
+    assert detect.normalize_levels(True) == ("nfkc",)
+    assert detect.normalize_levels([]) == ("nfkc",)
+    assert detect.normalize_levels(["fold", "nfkc"]) == ("nfkc", "fold")
+    with pytest.raises(ValueError):
+        detect.normalize_levels(["kana"])

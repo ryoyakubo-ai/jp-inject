@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import __version__, analysis, dataset, detect, runner, transforms, validation
+from . import __version__, analysis, dataset, detect, gap, normalize, runner, transforms, validation
 
 TRANSFORMS = {
     "fullwidth": transforms.to_fullwidth,
@@ -137,6 +137,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             repeats=args.repeats, temperature=args.temperature, max_tokens=args.max_tokens,
             seed=args.seed, defense=args.defense, timeout=args.timeout, retries=args.retries,
             extra=extra, allow_remote=args.allow_remote, concurrency=args.concurrency,
+            normalize=args.normalize,
         )
     except ValueError as error:
         print(str(error), file=sys.stderr)
@@ -223,7 +224,8 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
     try:
         result = detect.score_cases(detectors, Path(args.out), cases=_select(dataset.load_cases(), args),
-                                    loader=loader, normalize=args.normalize)
+                                    loader=loader,
+                                    normalize=False if args.normalize is None else args.normalize)
     except detect.NothingToScore as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -242,6 +244,22 @@ def cmd_detect_report(args: argparse.Namespace) -> int:
         return 2
     judged = _rows(args.runs) if args.runs else None
     for path in detect.write_report(rows, Path(args.out), threshold=args.threshold, judged=judged):
+        print(path)
+    return 0
+
+
+def cmd_gap_report(args: argparse.Namespace) -> int:
+    try:
+        rows = detect.load_scores(Path(args.scores))
+    except detect.DatasetMismatchError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    try:
+        written = gap.write_report(rows, _rows(args.runs), Path(args.out), threshold=args.threshold)
+    except gap.GapInputError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    for path in written:
         print(path)
     return 0
 
@@ -295,6 +313,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--extra", help="extra fields as one JSON object (quoting is awkward in PowerShell; prefer --set)")
     p.add_argument("--allow-remote", action="store_true",
                    help="allow a non-local endpoint (only with the provider's permission)")
+    p.add_argument("--normalize", choices=normalize.LEVELS, metavar="LEVEL",
+                   help="normalise each user message before sending it (nfkc or fold), to measure a "
+                        "pipeline that normalises the model's input. Stored under the label MODEL+LEVEL "
+                        "unless --label is given")
     p.add_argument("--dry-run", action="store_true", help="show what would be sent, send nothing")
     _add_filters(p)
     p.set_defaults(func=cmd_run)
@@ -329,9 +351,10 @@ def build_parser() -> argparse.ArgumentParser:
                         f"ID@COMMIT. Default: {', '.join(detect.DEFAULT_DETECTORS)}")
     p.add_argument("--device", default="cpu", help="cpu (default) or cuda")
     p.add_argument("--batch-size", type=int, default=8)
-    p.add_argument("--normalize", action="store_true",
-                   help="also score each user message after NFKC normalisation and removal of "
-                        "zero-width characters (view message_nfkc)")
+    p.add_argument("--normalize", nargs="*", choices=normalize.LEVELS, metavar="LEVEL",
+                   help="also score each user message after normalisation. nfkc: NFKC and removal of "
+                        "zero-width characters (view message_nfkc); fold: nfkc plus modern kanji forms "
+                        "and look-alike repair (view message_fold). Without a level: nfkc")
     _add_filters(p)
     p.set_defaults(func=cmd_detect)
 
@@ -341,6 +364,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=float, default=detect.DEFAULT_THRESHOLD)
     p.add_argument("--out", required=True, help="output directory")
     p.set_defaults(func=cmd_detect_report)
+
+    p = sub.add_parser("gap-report", help="put detector misses and model compliance side by side, "
+                                          "with and without input normalisation")
+    p.add_argument("scores", help="detector score file written by `jp-inject detect`")
+    p.add_argument("--runs", nargs="+", required=True,
+                   help="model result files; include runs recorded with `run --normalize` to compare "
+                        "a pipeline that also normalises the model's input")
+    p.add_argument("--threshold", type=float, default=detect.DEFAULT_THRESHOLD)
+    p.add_argument("--out", required=True, help="output directory")
+    p.set_defaults(func=cmd_gap_report)
 
     p = sub.add_parser("build", help="(maintainers) regenerate cases.jsonl from the sources")
     p.add_argument("--check", action="store_true", help="only verify that cases.jsonl is current")
