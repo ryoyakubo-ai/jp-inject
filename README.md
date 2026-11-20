@@ -16,7 +16,9 @@ technique, how the attack success rate moves.
 > generations each) is in [docs/report.md](docs/report.md), with the raw
 > responses under `results/`. Short version: on these two models we could
 > not confirm any Japanese-specific wording or re-spelling that makes
-> injection more effective on both, and most made it less effective.
+> injection more effective on both, and most made it less effective. Of two
+> open detectors placed in front of the model, neither flagged English written
+> in full-width letters, which the models still followed.
 
 ## Why this exists
 
