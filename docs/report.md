@@ -46,10 +46,10 @@ What we found, for these two models and this one defensive sentence:
 
 7. **Two open detectors placed in front of the model behaved very
    differently, and full-width English got past both.** One flagged 249 of
-   the 460 attack documents but also 53 of 55 harmless instructions; the other
-   flagged 47 of 460 and almost nothing harmless. Re-spelling Japanese in kana
+   the 460 user messages that carry an attack but also 53 of 55 harmless
+   instructions; the other flagged 47 of 460 and almost nothing harmless. Re-spelling Japanese in kana
    or romaji did not get past the first. English written in full-width letters
-   was flagged by neither (14 of 20 and 5 of 20 documents when written
+   was flagged by neither (14 of 20 and 5 of 20 messages when written
    normally, 0 of 20 in full-width), and the models still followed it.
 
 The expectation that motivated this project — that Japanese politeness or
@@ -291,17 +291,21 @@ detectors, at their default threshold of 0.5:
 - `meta-llama/Llama-Prompt-Guard-2-86M`, built on a multilingual base model;
   Japanese is not among the languages its model card lists as evaluated.
 
-Each detector was shown the untrusted text exactly as the application would
-pass it on (the customer's message, or the document to summarise or
-translate). Nothing was generated; a detector is deterministic.
+Each detector was shown the whole user message the application sends to the
+model. For the support bot that is the customer's text. For summarisation and
+translation it is the application's own request line ("Please summarize the
+following document."), the delimiters, and the document between them, so the
+detection rate for a document checked on its own, before the application
+wraps it, is not known from this measurement. Nothing was generated; a
+detector is deterministic.
 
 | | ProtectAI v2 | Prompt Guard 2 |
 | --- | --- | --- |
-| Attack documents flagged (of 460) | 249 | 47 |
-| Documents with no injection flagged (of 30) | 1 | 0 |
+| User messages carrying an attack flagged (of 460) | 249 | 47 |
+| User messages with no injection flagged (of 30) | 1 | 0 |
 | Harmless one-line instructions flagged (of 55) | 53 | 1 |
 
-Flagged documents per wording, out of 10 direct and 10 indirect base attacks:
+Flagged messages per wording, out of 10 direct and 10 indirect base attacks:
 
 | Condition | ProtectAI v2: direct | indirect | Prompt Guard 2: direct | indirect |
 | --- | --- | --- | --- | --- |
@@ -328,11 +332,11 @@ each detector in front of each model are in
 
 ProtectAI v2 flagged 206 of the 230 direct attack messages (all ten in 17 of
 the 23 wordings), but it also flagged 53 of the 55 harmless one-line
-instructions, and it flagged only 43 of the 230 indirect attack documents
-(none of the summarisation documents in plain Japanese or English). That pattern fits a
+instructions, and it flagged only 43 of the 230 indirect attack messages
+(none of the summarisation requests in plain Japanese or English). That pattern fits a
 detector that reacts to a short message that reads like an instruction, more
 than to an injection as such. Prompt Guard 2 produced almost no false alarms
-and missed about nine attack documents in ten; 34 of the 47 it flagged use the
+and missed about nine attack messages in ten; 34 of the 47 it flagged use the
 "ignore the previous instructions" wording.
 
 Neither result is a verdict on the detectors in general: these are 20 base
@@ -350,9 +354,10 @@ flagged only 2 times in 20, so the difference cannot be told from noise.
 ### D3. Full-width English got past both detectors, and the models still followed it
 
 Writing the English payload in full-width letters (Ｉｇｎｏｒｅ instead of
-Ignore) took ProtectAI v2 from 14 of 20 documents flagged to 0, and Prompt
-Guard 2 from 5 of 20 to 0. Both models read full-width text (comprehension
-100%) and followed the full-width payload in 25% and 10% of generations.
+Ignore) took ProtectAI v2 from 14 of 20 messages flagged to 0, and Prompt
+Guard 2 from 5 of 20 to 0. Both models followed a short harmless instruction
+written in full-width letters every time (comprehension control, 100%), and
+followed the full-width payload in 25% and 10% of generations.
 
 What this is worth to an attacker depends on how good the filter was to begin
 with. Where the filter worked, the effect is large: for the direct attacks,
@@ -410,11 +415,15 @@ countermeasure is cheap: normalise the text before it reaches the detector.
 - Judge validation was done by the same AI assistant that wrote the judge,
   with a small owner review; see *How far to trust the judge*.
 - `ja.hankaku` on gpt-oss-20b lost 17% of its generations to the token limit.
-- Detectors: two detectors, one threshold, each case scored once, and only
-  the untrusted text was shown to them. "Attack success with a detector in
-  front" is computed from separate measurements (the model's success rate,
-  set to zero for documents the detector flagged); no end-to-end pipeline was
-  run. Full-width Japanese kana do not exist as a separate form, so the
+- Detectors: two detectors, one threshold, each case scored once, on the
+  whole user message (for summarisation and translation that includes the
+  application's request line and delimiters; the bare document was not
+  scored). "Attack success with a detector in front" is computed from
+  separate measurements (the model's success rate, set to zero for messages
+  the detector flagged); no end-to-end pipeline was run. The detectors were
+  downloaded from the Hugging Face hub on 20 November 2026 at their default
+  revision; the exact commits were not recorded for the published scores (the
+  tool records them from now on, and accepts `ID@COMMIT` to pin one). Full-width Japanese kana do not exist as a separate form, so the
   full-width condition is English only.
 - The 1,024-token limit excluded one planned model.
 

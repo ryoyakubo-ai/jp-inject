@@ -142,7 +142,9 @@ spaces between words) instead of guessing how kanji are read. See
 A model is one line of defence; many applications put a classifier in front of
 it that is meant to flag injected text before the model sees it. `jp-inject
 detect` scores every test case with such classifiers from the Hugging Face hub
-and reports, per wording, how many of the 20 base attacks were flagged.
+and reports, per wording, how many of the 20 base attacks were flagged. The
+detector is shown the whole user message the application would send to the
+model.
 
 ```powershell
 pip install -e ".[detect]"          # adds torch and transformers
@@ -152,11 +154,12 @@ jp-inject detect-report results/detectors/scores.jsonl --runs results/*.jsonl --
 
 By default it scores `protectai/deberta-v3-base-prompt-injection-v2` and
 `meta-llama/Llama-Prompt-Guard-2-86M`; add or replace with `--detector
-<hub-id>`. The second is gated: accept its licence on its Hugging Face page and
+<hub-id>`, or pin a version with `--detector <hub-id>@<commit>` (the commit
+that was used is recorded next to the scores). The second is gated: accept its licence on its Hugging Face page and
 run `hf auth login` first, otherwise it is skipped and reported as skipped.
 With `--runs`, the report also shows the attack success rate that remains when
-a generation counts only if the detector missed the document *and* the model
-followed it. Scores are stored raw, so `--threshold` can be changed without
+a generation counts only if the detector missed the user message *and* the
+model followed it. Scores are stored raw, so `--threshold` can be changed without
 scoring again.
 
 ## How results are judged, and how much to trust them

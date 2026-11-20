@@ -319,7 +319,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("detect", help="score the test cases with prompt-injection detectors (needs jp-inject[detect])")
     p.add_argument("--out", required=True, help="score file (JSON Lines)")
     p.add_argument("--detector", action="append", metavar="HF_MODEL_ID",
-                   help=f"Hugging Face text-classification model (repeatable). Default: {', '.join(detect.DEFAULT_DETECTORS)}")
+                   help="Hugging Face text-classification model (repeatable); pin a version with "
+                        f"ID@COMMIT. Default: {', '.join(detect.DEFAULT_DETECTORS)}")
     p.add_argument("--device", default="cpu", help="cpu (default) or cuda")
     p.add_argument("--batch-size", type=int, default=8)
     _add_filters(p)

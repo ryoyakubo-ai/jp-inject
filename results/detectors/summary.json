@@ -3,7 +3,7 @@
     "detector": "meta-llama/Llama-Prompt-Guard-2-86M",
     "threshold": 0.5,
     "views": {
-      "document": {
+      "message": {
         "ja.plain": {
           "bases": 20,
           "rate": 0.1,
@@ -579,7 +579,7 @@
       }
     },
     "behind_filter": {
-      "gpt-oss-20b": {
+      "gpt-oss-20b (defense profile: basic)": {
         "ja.plain": {
           "asr": {
             "bases": 20,
@@ -903,7 +903,7 @@
           }
         }
       },
-      "llm-jp-4.1-8b-thinking": {
+      "llm-jp-4.1-8b-thinking (defense profile: basic)": {
         "ja.plain": {
           "asr": {
             "bases": 20,
@@ -1244,7 +1244,7 @@
     "detector": "protectai/deberta-v3-base-prompt-injection-v2",
     "threshold": 0.5,
     "views": {
-      "document": {
+      "message": {
         "ja.plain": {
           "bases": 20,
           "rate": 0.55,
@@ -1820,7 +1820,7 @@
       }
     },
     "behind_filter": {
-      "gpt-oss-20b": {
+      "gpt-oss-20b (defense profile: basic)": {
         "ja.plain": {
           "asr": {
             "bases": 20,
@@ -2144,7 +2144,7 @@
           }
         }
       },
-      "llm-jp-4.1-8b-thinking": {
+      "llm-jp-4.1-8b-thinking (defense profile: basic)": {
         "ja.plain": {
           "asr": {
             "bases": 20,
