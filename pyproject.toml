@@ -29,6 +29,7 @@ dependencies = []
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.7"]
+detect = ["torch>=2.6", "transformers>=4.44", "sentencepiece>=0.2", "protobuf>=4"]
 dev = ["pytest>=7", "matplotlib>=3.7"]
 
 [project.scripts]

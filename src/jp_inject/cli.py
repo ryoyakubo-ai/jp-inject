@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import __version__, analysis, dataset, runner, transforms, validation
+from . import __version__, analysis, dataset, detect, runner, transforms, validation
 
 TRANSFORMS = {
     "fullwidth": transforms.to_fullwidth,
@@ -215,6 +215,36 @@ def cmd_agreement(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_detect(args: argparse.Namespace) -> int:
+    detectors = args.detector or list(detect.DEFAULT_DETECTORS)
+
+    def loader(model_id: str):
+        return detect.load_hf_detector(model_id, device=args.device, batch_size=args.batch_size)
+
+    try:
+        result = detect.score_cases(detectors, Path(args.out), cases=_select(dataset.load_cases(), args), loader=loader)
+    except detect.NothingToScore as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    print(f"scored: {', '.join(result['scored']) or 'none'}")
+    for item in result["skipped"]:
+        print(f"skipped: {item['detector']}: {item['reason']}")
+    print(f"written: {args.out}")
+    return 0 if result["scored"] else 1
+
+
+def cmd_detect_report(args: argparse.Namespace) -> int:
+    try:
+        rows = detect.load_scores(Path(args.scores))
+    except detect.DatasetMismatchError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    judged = _rows(args.runs) if args.runs else None
+    for path in detect.write_report(rows, Path(args.out), threshold=args.threshold, judged=judged):
+        print(path)
+    return 0
+
+
 # ------------------------------------------------------------------ parser
 
 
@@ -289,6 +319,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("sheet")
     p.add_argument("key")
     p.set_defaults(func=cmd_agreement)
+
+    p = sub.add_parser("detect", help="score the test cases with prompt-injection detectors (needs jp-inject[detect])")
+    p.add_argument("--out", required=True, help="score file (JSON Lines)")
+    p.add_argument("--detector", action="append", metavar="HF_MODEL_ID",
+                   help="Hugging Face text-classification model (repeatable); pin a version with "
+                        f"ID@COMMIT. Default: {', '.join(detect.DEFAULT_DETECTORS)}")
+    p.add_argument("--device", default="cpu", help="cpu (default) or cuda")
+    p.add_argument("--batch-size", type=int, default=8)
+    _add_filters(p)
+    p.set_defaults(func=cmd_detect)
+
+    p = sub.add_parser("detect-report", help="write detection-rate tables from a score file")
+    p.add_argument("scores")
+    p.add_argument("--runs", nargs="+", help="model result files, to combine detection with attack success")
+    p.add_argument("--threshold", type=float, default=detect.DEFAULT_THRESHOLD)
+    p.add_argument("--out", required=True, help="output directory")
+    p.set_defaults(func=cmd_detect_report)
 
     p = sub.add_parser("build", help="(maintainers) regenerate cases.jsonl from the sources")
     p.add_argument("--check", action="store_true", help="only verify that cases.jsonl is current")

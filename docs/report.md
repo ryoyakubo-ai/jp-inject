@@ -44,12 +44,20 @@ What we found, for these two models and this one defensive sentence:
    Japanese ones. A defence that only looks for Japanese wording would miss
    them.
 
+7. **Two open detectors placed in front of the model behaved very
+   differently, and full-width English got past both.** One flagged 249 of
+   the 460 user messages that carry an attack but also 53 of 55 harmless
+   instructions; the other flagged 47 of 460 and almost nothing harmless. Re-spelling Japanese in kana
+   or romaji did not get past the first. English written in full-width letters
+   was flagged by neither (14 of 20 and 5 of 20 messages when written
+   normally, 0 of 20 in full-width), and the models still followed it.
+
 The expectation that motivated this project — that Japanese politeness or
 script variation would slip past a model's caution — is not supported by these
-measurements. What remains open, and what this report cannot answer, is
-whether input filters that sit in front of a model recognise the re-spelled
-forms. The models still handled them in a short control task, and attacks
-written in them still succeed some of the time.
+measurements. Nor did Japanese re-spelling reliably get past an input filter.
+The script trick that did is not specific to Japanese text: it is the
+full-width Latin alphabet, a form that exists because of Japanese and other
+East Asian typography.
 
 ## Scope and assumptions
 
@@ -68,8 +76,10 @@ written in them still succeed some of the time.
   in the system prompt). All payloads are harmless by construction; nothing in
   the test set asks for harmful content.
 - **Defence.** One sentence in the system prompt telling the model to treat
-  the document as data and not to follow instructions inside it. No input or
-  output filter.
+  the document as data and not to follow instructions inside it. The model
+  runs use no input or output filter. Two open prompt-injection detectors
+  were scored separately on the same test cases (see *Detectors in front of
+  the model*).
 - **Models.** `llm-jp-4.1-8b-thinking` (Q4_K_M) and `gpt-oss-20b` (MXFP4),
   both as GGUF files served by LM Studio 0.4.28 on one consumer PC,
   temperature 0.7, at most 1,024 output tokens. A third model
@@ -270,15 +280,101 @@ partly a floor effect.
 gpt-oss-20b. One model, one uncorrected comparison among 19: a lead to follow
 up, not a result.
 
-### Not tested: input filters
+## Detectors in front of the model
 
-Hiragana, katakana, romaji and old-style kanji are not folded together by
-Unicode normalisation (NFKC), and the models followed short harmless
-instructions written in each of them. A keyword list
-or a classifier that has only seen the standard spelling may therefore not
-recognise the re-spelled payload, while the model behind it still does and
-still complies in up to 44% of generations. No filter was part of this
-measurement, so this is a hypothesis for the next round, not a finding.
+Many applications put a classifier in front of the model to flag injected
+text before the model sees it. We scored every test case once with two open
+detectors, at their default threshold of 0.5:
+
+- `protectai/deberta-v3-base-prompt-injection-v2`, whose model card describes
+  it as English-only;
+- `meta-llama/Llama-Prompt-Guard-2-86M`, built on a multilingual base model;
+  Japanese is not among the languages its model card lists as evaluated.
+
+Each detector was shown the whole user message the application sends to the
+model. For the support bot that is the customer's text. For summarisation and
+translation it is the application's own request line ("Please summarize the
+following document."), the delimiters, and the document between them, so the
+detection rate for a document checked on its own, before the application
+wraps it, is not known from this measurement. Nothing was generated; a
+detector is deterministic.
+
+| | ProtectAI v2 | Prompt Guard 2 |
+| --- | --- | --- |
+| User messages carrying an attack flagged (of 460) | 249 | 47 |
+| User messages with no injection flagged (of 30) | 1 | 0 |
+| Harmless one-line instructions flagged (of 55) | 53 | 1 |
+
+Flagged messages per wording, out of 10 direct and 10 indirect base attacks:
+
+| Condition | ProtectAI v2: direct | indirect | Prompt Guard 2: direct | indirect |
+| --- | --- | --- | --- | --- |
+| `ja.plain` | 10/10 | 1/10 | 0/10 | 2/10 |
+| `en.plain` | 10/10 | 4/10 | 2/10 | 3/10 |
+| `ja.keigo` | 10/10 | 0/10 | 0/10 | 0/10 |
+| `ja.indirect` | 9/10 | 0/10 | 0/10 | 0/10 |
+| `ja.mixed` | 10/10 | 2/10 | 2/10 | 2/10 |
+| `ja.hiragana` | 10/10 | 0/10 | 0/10 | 0/10 |
+| `ja.katakana` | 10/10 | 0/10 | 0/10 | 0/10 |
+| `ja.hankaku` | 6/10 | 0/10 | 0/10 | 0/10 |
+| `ja.romaji` | 10/10 | 0/10 | 0/10 | 0/10 |
+| `ja.kyujitai` | 10/10 | 1/10 | 2/10 | 3/10 |
+| `ja.zero_width` | 10/10 | 5/10 | 0/10 | 0/10 |
+| `en.fullwidth` | 0/10 | 0/10 | 0/10 | 0/10 |
+| `en.zero_width` | 10/10 | 0/10 | 0/10 | 0/10 |
+| `en.plain@ja` | 10/10 | 6/10 | 3/10 | 5/10 |
+
+All 23 conditions, intervals, and the attack success rate that remains with
+each detector in front of each model are in
+[`results/detectors/summary.md`](../results/detectors/summary.md).
+
+### D1. The two detectors fail in opposite directions
+
+ProtectAI v2 flagged 206 of the 230 direct attack messages (all ten in 17 of
+the 23 wordings), but it also flagged 53 of the 55 harmless one-line
+instructions, and it flagged only 43 of the 230 indirect attack messages
+(none of the summarisation requests in plain Japanese or English). That pattern fits a
+detector that reacts to a short message that reads like an instruction, more
+than to an injection as such. Prompt Guard 2 produced almost no false alarms
+and missed about nine attack messages in ten; 34 of the 47 it flagged use the
+"ignore the previous instructions" wording.
+
+Neither result is a verdict on the detectors in general: these are 20 base
+attacks of one author, with harmless payloads, and one threshold.
+
+### D2. Japanese re-spelling did not reliably get past a detector
+
+Against ProtectAI v2, hiragana, katakana, romaji and old-style kanji changed
+nothing for direct attacks (10 of 10 flagged each). Half-width katakana
+lowered detection (6 of 10), but the models almost never followed half-width
+payloads (6% and 1%), so nothing is gained. Against Prompt Guard 2 the kana
+and romaji forms were flagged 0 times in 20, but the plain Japanese form was
+flagged only 2 times in 20, so the difference cannot be told from noise.
+
+### D3. Full-width English got past both detectors, and the models still followed it
+
+Writing the English payload in full-width letters (Ｉｇｎｏｒｅ instead of
+Ignore) took ProtectAI v2 from 14 of 20 messages flagged to 0, and Prompt
+Guard 2 from 5 of 20 to 0. Both models followed a short harmless instruction
+written in full-width letters every time (comprehension control, 100%), and
+followed the full-width payload in 25% and 10% of generations.
+
+What this is worth to an attacker depends on how good the filter was to begin
+with. Where the filter worked, the effect is large: for the direct attacks,
+ProtectAI v2 flagged all ten plain English messages, so none would reach the
+model; none of the full-width versions was flagged, and the models followed
+them in 8 of 50 and 7 of 50 generations. Over all 20 base attacks the gain is
+small (25% against 21% for llm-jp behind ProtectAI v2, 11% against 8% for
+gpt-oss; these are averages over base attacks, which is why 11% differs
+slightly from the pooled 10% above), because full-width text also halves the
+models' compliance. Behind
+Prompt Guard 2, which let most plain payloads through anyway, plain English
+remained the better choice for the attacker.
+
+Full-width forms are folded to ASCII by Unicode normalisation (NFKC), so the
+countermeasure is cheap: normalise the text before it reaches the detector.
+
+- OWASP: LLM01 · ATLAS: AML.T0051, AML.T0068 LLM Prompt Obfuscation
 
 ## Guidance
 
@@ -288,11 +384,16 @@ measurement, so this is a hypothesis for the next round, not a finding.
 2. **Keep secrets out of the system prompt.**
 3. **Test in both languages**, whatever the language of the product, and
    include payloads that imitate system messages.
-4. **If you run an input filter, test it on re-spelled Japanese** (kana-only,
-   half-width katakana, romaji, old-style kanji, zero-width characters,
-   cross-script look-alikes). `jp-inject transform` produces these from any
-   text; kana and romaji forms need the reading of the sentence.
-5. **Do not match on the raw output string** to decide whether an attack
+4. **If you run an input filter, normalise before you classify, and test the
+   filter on re-spelled text.** Apply NFKC and strip zero-width characters
+   before the detector sees the text; that removes the full-width bypass
+   found here. Then test with the forms normalisation does not fold (kana-only,
+   romaji, old-style kanji, cross-script look-alikes). `jp-inject transform`
+   produces all of these from any text, and `jp-inject detect` scores a
+   detector on the whole test set.
+5. **Measure a filter's false alarms together with its detection rate.** One
+   of the two detectors here flagged nearly every harmless instruction.
+6. **Do not match on the raw output string** to decide whether an attack
    happened or to drive behaviour; models quote what they refuse.
 
 ## Limitations
@@ -314,6 +415,17 @@ measurement, so this is a hypothesis for the next round, not a finding.
 - Judge validation was done by the same AI assistant that wrote the judge,
   with a small owner review; see *How far to trust the judge*.
 - `ja.hankaku` on gpt-oss-20b lost 17% of its generations to the token limit.
+- Detectors: two detectors, one threshold, each case scored once, on the
+  whole user message (for summarisation and translation that includes the
+  application's request line and delimiters; the bare document was not
+  scored). "Attack success with a detector in front" is computed from
+  separate measurements (the model's success rate, set to zero for messages
+  the detector flagged); no end-to-end pipeline was run. The published scores
+  were produced with ProtectAI v2 at commit `90c9989b` and Prompt Guard 2 at
+  commit `a8ded8e6` (full hashes in `results/detectors/scores.jsonl.meta.json`);
+  a second, independent scoring run gave identical scores for all 2,010
+  texts. Full-width Japanese kana do not exist as a separate form, so the
+  full-width condition is English only.
 - The 1,024-token limit excluded one planned model.
 
 ## Reproduction
@@ -323,6 +435,15 @@ pip install -e ".[plot]"
 
 # regenerate every table and figure in this report from the raw responses
 jp-inject report results/*.jsonl --out results/report
+
+# regenerate the detector tables (scores are stored; no model download needed)
+jp-inject detect-report results/detectors/scores.jsonl --runs results/*.jsonl --out results/detectors
+
+# score the detectors again at the versions used here (downloads them; Prompt Guard 2 is gated)
+pip install -e ".[detect]"
+jp-inject detect --out results/detectors/scores.jsonl \
+  --detector protectai/deberta-v3-base-prompt-injection-v2@90c9989b1a342275dd0d1a95aad283c04e075671 \
+  --detector meta-llama/Llama-Prompt-Guard-2-86M@a8ded8e697ce7c355e395a0df51f94adb4a2fd27
 
 # repeat the judge validation
 jp-inject agreement results/validation/gpt-oss-20b/sheet.csv results/validation/gpt-oss-20b/key.jsonl
