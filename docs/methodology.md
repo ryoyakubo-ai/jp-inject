@@ -56,6 +56,9 @@ those used in the literature for the same idea.
 Each scenario has a Japanese and an English version (system prompt, documents
 and user turn all in that language). Each strategy is paired with a different
 document or customer question, so results do not rest on a single document.
+The pairing is fixed, which means a difference between strategies is also a
+difference between input texts; the design supports comparisons between
+wordings of the same attack, not a ranking of strategies.
 The injected text is appended to the benign text, inside the application's
 delimiters for the two indirect scenarios.
 
@@ -267,8 +270,9 @@ rather than adding noise.
 The rule was changed as described under *Judging* (for a hijack the code must
 stand essentially alone in its sentence), 承れ was added to the refusal
 phrases, and the ten cases became regression tests. Every result reported uses
-the revised judge on the unchanged raw responses. A fresh sample of 150
-(seed 1; 89 of its responses were not in the first sample) agreed on 150.
+the revised judge on the unchanged raw responses. A re-drawn sample of 150
+(seed 1; 122 of its generations were new, 28 had also been in the first
+sample) agreed on 150.
 Effect on the first run: `partial` fell from 15 to 5, `ja.katakana` from 18%
 to 10%, `ja.hankaku` from 7% to 6%, `ja.indirect` from 15% to 14%; no other
 condition moved.

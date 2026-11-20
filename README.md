@@ -14,9 +14,9 @@ technique, how the attack success rate moves.
 > **Status: v0.1.** The test cases, transforms, runner, judge and analysis are
 > complete and tested. The first measurement (two local models, 2,725
 > generations each) is in [docs/report.md](docs/report.md), with the raw
-> responses under `results/`. Short version: on these two models, no
-> Japanese-specific wording or re-spelling made injection more effective, and
-> most made it less effective.
+> responses under `results/`. Short version: on these two models we could
+> not confirm any Japanese-specific wording or re-spelling that makes
+> injection more effective on both, and most made it less effective.
 
 ## Why this exists
 

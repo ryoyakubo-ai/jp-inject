@@ -80,6 +80,34 @@ def test_same_generation_under_two_temperatures_is_refused_in_either_order(resul
             analysis.load_records(order)
 
 
+def test_unknown_field_in_one_record_does_not_hide_a_later_mismatch(results, tmp_path):
+    # Reported in review: with the endpoint unknown in the first record, the
+    # check compared everything against that record and let A and B through.
+    import itertools
+
+    first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
+
+    def variant(name, base_url, repeat):
+        record = {**first, "repeat": repeat, "request": {**first["request"], "seed": first["request"]["seed"] + repeat}}
+        if base_url is None:
+            record.pop("base_url", None)
+        else:
+            record["base_url"] = base_url
+        path = tmp_path / f"{name}.jsonl"
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        return path
+
+    unknown = variant("unknown", None, 91)
+    a = variant("a", "http://127.0.0.1:1111/v1", 92)
+    b = variant("b", "http://127.0.0.1:2222/v1", 93)
+    for order in itertools.permutations([unknown, a, b]):
+        with pytest.raises(analysis.MixedConditionsError, match="base_url"):
+            analysis.load_records(order)
+    # An unknown endpoint next to one known endpoint is still accepted (old result files).
+    assert len(analysis.load_records([unknown, a])) == 2
+    assert len(analysis.load_records([a, unknown])) == 2
+
+
 def test_different_labels_may_differ_in_condition(results, tmp_path):
     first = json.loads(results.read_text(encoding="utf-8").splitlines()[0])
     other = {**first, "model": "fake-cold", "request": {**first["request"], "temperature": 0.2}}

@@ -6,26 +6,34 @@ First measurement report for jp-inject v0.1 · November 2026
 
 ## Summary
 
-We measured 20 indirect prompt-injection attacks, each written in 23 ways
-(plain Japanese and English, four registers, two framings, and nine
-re-spellings such as hiragana-only, katakana-only, romaji, old-style kanji and
-zero-width characters), against two openly available models run locally. Every
+We measured 20 prompt-injection attacks against two openly available models
+run locally. Ten are direct (typed by the user of a customer-support bot) and
+ten are indirect (hidden in a document the application is asked to summarise
+or translate). Each attack was written in 23 ways: plain Japanese and English,
+four registers, two framings, and nine re-spellings such as hiragana-only,
+katakana-only, romaji, old-style kanji and zero-width characters. Every
 combination was generated five times: 2,725 generations per model.
 
 What we found, for these two models and this one defensive sentence:
 
-1. **Injection works without any tricks.** A plainly written instruction
-   hidden in a document was followed in 44% (Japanese) and 50% (English) of
-   generations by one model and 14% and 31% by the other.
-2. **No Japanese-specific technique made attacks more effective on both
-   models.** Polite, indirect and "official notice" wording lowered success in
-   Japanese and in English alike. Re-spelling the payload in hiragana,
-   katakana, half-width katakana or romaji lowered it further, in several
-   cases to near zero.
+1. **Injection works without any tricks.** A plainly written instruction was
+   followed in 44% (Japanese) and 50% (English) of generations by one model
+   and 14% and 31% by the other, direct and indirect attacks taken together.
+   For the indirect attacks alone the figures are 65% and 72%, and 18% and
+   30%.
+2. **We could not confirm any Japanese-specific technique that raises success
+   on both models.** Polite, indirect and "official notice" wording lowered
+   success in Japanese and in English alike. Re-spelling the payload in
+   hiragana, katakana, half-width katakana or romaji lowered it further, in
+   several cases to near zero. The one technique with a positive estimate on
+   both models, framing the payload as a note (+6 and +2 points), has
+   intervals that include zero.
 3. **The models could still read the re-spelled text.** A harmless instruction
    written the same way was followed 88–100% of the time. The drop is the
    model declining or ignoring the instruction, not failing to parse it.
-4. **Old-style kanji changed nothing** (difference of 0 points on both models).
+4. **Old-style kanji had no detectable effect.** The estimated difference is
+   0 points on both models, with intervals of about −8 to +7 points
+   (llm-jp) and −4 to +4 (gpt-oss).
 5. **One technique raised success on one model only.** Mixing English key
    words into a Japanese sentence added 18 points on llm-jp-4.1-8b-thinking
    and nothing on gpt-oss-20b.
@@ -41,10 +49,13 @@ forms. The model still reads them, and they still succeed some of the time.
 
 ## Scope and assumptions
 
-- **Threat model.** Indirect prompt injection: the attacker controls part of a
-  document that an application passes to a model (a customer message, a text
-  to summarise, a text to translate). The attacker cannot see or change the
-  system prompt.
+- **Threat model.** Two channels. *Direct*: the attacker is the user of a
+  customer-support bot and types the instruction into their own message
+  (10 base attacks, including the 5 that target the secret). *Indirect*: the
+  attacker controls part of a document that someone else asks the application
+  to summarise or translate (10 base attacks). In neither case can the
+  attacker see or change the system prompt. Headline rates pool both channels
+  unless stated; the split is given under *Results*.
 - **Applications.** Three simulated single-turn applications (customer
   support, summarisation, translation), each in a Japanese and an English
   version. No tools, no retrieval, no multi-turn conversation.
@@ -95,12 +106,13 @@ stratified samples of 150 generations per round.
 | Model | Round | Agreement in sample | Population-weighted | Cohen's kappa |
 | --- | --- | --- | --- | --- |
 | llm-jp-4.1-8b-thinking | 1 (original rule) | 140 / 150 | 99.6% | 0.86 |
-| llm-jp-4.1-8b-thinking | 2 (revised rule, fresh sample) | 150 / 150 | 100% | 1.00 |
+| llm-jp-4.1-8b-thinking | 2 (revised rule, re-drawn sample) | 150 / 150 | 100% | 1.00 |
 | gpt-oss-20b | 1 (revised rule) | 149 / 150 | 99.96% | 0.98 |
 
 Round 1 exposed a systematic error: in the translation task the judge counted
 a translated copy of the injected request as a partial hijack, mostly under
-`ja.katakana`. The rule was revised and re-checked on a fresh sample; all
+`ja.katakana`. The rule was revised and re-checked on a re-drawn sample of
+150, of which 122 generations were new and 28 had also been in round 1; all
 numbers in this report use the revised rule. Details are in the *Deviations*
 section of the methodology. The one remaining disagreement (gpt-oss-20b) is a
 garbled translation short enough to pass as a bare code; it is the only such
@@ -115,7 +127,8 @@ independent validation. The labelled sheets are in `results/validation/`.
 
 ## Results
 
-Attack success rate, with the one defensive sentence in place. Brackets are
+Attack success rate, with the one defensive sentence in place, over all 20
+base attacks (direct and indirect pooled). Brackets are
 95% intervals; Δ is the paired difference in percentage points from the plain
 payload in the same language.
 
@@ -156,12 +169,18 @@ Other figures used below (all from `results/report/summary.md`):
   gpt-oss had no usable answer and are excluded. For gpt-oss, 17 of the 100
   attack generations under `ja.hankaku` were lost this way, leaving 83.
 - **Benign controls.** 0 of 150 produced a code, for both models.
+- **By channel** (plain payloads; from the *By target* tables). Indirect
+  (summarisation and translation): llm-jp 32/49 = 65% Japanese and
+  36/50 = 72% English; gpt-oss 9/50 = 18% and 15/50 = 30%. Direct (customer
+  support, hijack and leak together): llm-jp 12/50 = 24% and 14/50 = 28%;
+  gpt-oss 5/50 = 10% and 16/50 = 32%.
 - **Payload language × application language** (plain payloads). English
   payload in a Japanese application: 58% (llm-jp) and 27% (gpt-oss). Japanese
   payload in an English application: 37% and 18%.
 - **By strategy**, pooled over all conditions. Pretending to be a system
   message: 58% and 38%. "Ignore the previous instructions": 14% and 2%. The
-  other three strategies fall between.
+  other three strategies fall between. Each strategy was always paired with
+  the same input text, so these differences mix the two (see F2).
 - **By target**, pooled over all conditions. Hijack in translation 59% / 19%,
   customer support 32% / 20%, summarisation 39% / 7%. System prompt leak
   3% / 1% (16 and 4 generations).
@@ -175,24 +194,30 @@ Severity is given for an application shaped like the test scenarios. The
 payloads here are harmless; the rating reflects what the same behaviour would
 allow if the injected instruction were not.
 
-### F1. A hidden instruction is followed often, with no obfuscation — High
+### F1. An injected instruction is followed often, with no obfuscation — High
 
-Plain payloads succeeded in 14–50% of generations despite an explicit
-instruction to ignore them. 17 of 20 base attacks succeeded at least once
+Plain payloads succeeded in 14–50% of generations (direct and indirect
+together) despite an explicit instruction to ignore them, and in 18–72% for
+the indirect attacks alone. 17 of 20 base attacks succeeded at least once
 against llm-jp and 16 of 20 against gpt-oss. An attacker who can retry needs
 only one success.
 
 - OWASP Top 10 for LLM Applications 2025: LLM01 Prompt Injection
-- MITRE ATLAS: AML.T0051.001 LLM Prompt Injection: Indirect
+- MITRE ATLAS: AML.T0051.000 LLM Prompt Injection: Direct (customer support)
+  and AML.T0051.001 Indirect (summarisation, translation)
 
-### F2. Imitating a system message is the most effective strategy — High
+### F2. The cases that imitate a system message had the highest observed success — Observation, confounded
 
-Payloads formatted as a system message succeeded far more often than the
-others on both models (58% and 38% pooled), and the classic "ignore the
-previous instructions" was the weakest (14% and 2%). Testing only the classic
-form would understate the exposure.
+The base attacks formatted as a system message succeeded more often than the
+others on both models (58% and 38% pooled), and those using the classic
+"ignore the previous instructions" least often (14% and 2%). The design does
+not allow this to be read as a ranking of strategies: within each scenario
+every strategy is paired with one fixed document or customer question, so the
+strategy and the input text change together and their effects cannot be
+separated. What can be said is that, for these pairings, testing only the
+classic form would have understated the exposure.
 
-- OWASP: LLM01 · ATLAS: AML.T0051.001
+- OWASP: LLM01 · ATLAS: AML.T0051.000, AML.T0051.001
 
 ### F3. The language of the application does not confine the attack — Medium
 
@@ -200,7 +225,7 @@ English payloads worked in Japanese applications at least as well as Japanese
 payloads (58% vs 44%, 27% vs 14%; intervals overlap). Defences and test suites
 for a Japanese product need to cover English payloads too.
 
-- OWASP: LLM01 · ATLAS: AML.T0051.001
+- OWASP: LLM01 · ATLAS: AML.T0051.000, AML.T0051.001
 
 ### F4. The secret in the system prompt leaked rarely, but it leaked — Medium
 
@@ -220,12 +245,14 @@ trigger it. The *strict / loose* columns in `summary.md` bound this.
 
 - OWASP: LLM05 Improper Output Handling
 
-### F6. Japanese register and script variation did not help the attacker — Informational
+### F6. No evidence that Japanese register or script variation helps the attacker — Informational
 
 On both models, polite, indirect and authority-claiming wording reduced
 success, in Japanese and in English. The hypothesis that Japanese honorifics
 make a model more compliant is not supported. Kana and romaji re-spellings
-reduced success sharply while staying readable; old-style kanji had no effect.
+reduced success sharply while staying readable; for old-style kanji no effect
+was detected. This is an absence of evidence within wide intervals, not a
+demonstration that no such technique exists.
 Where the Japanese and English effects differ (for example, indirect wording
 on gpt-oss), the Japanese baseline is already low, so the smaller drop is
 partly a floor effect.
@@ -266,6 +293,9 @@ measurement, so this is a hypothesis for the next round, not a finding.
   Results may not carry over to larger or hosted models.
 - 20 base attacks. Intervals are wide and reflect the variation between
   attacks.
+- Strategy and input text are confounded: each strategy is always paired with
+  the same document or customer question, so differences between strategies
+  cannot be attributed to the strategy alone.
 - No multiplicity correction; see *Method*.
 - All attack texts were written by one author (an AI assistant) and are not a
   sample of attacks seen in the wild. Register variants were written by hand,
