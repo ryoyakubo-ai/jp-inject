@@ -61,18 +61,30 @@ def load_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
                 record["_source"] = str(path)
                 records.append(record)
 
-    reference: dict[tuple[str, str], dict[str, Any]] = {}
+    # For each model, remember the first *known* value of every condition field
+    # and where it came from. Comparing every record with the first record
+    # only would let "unknown, then A, then B" through, because an unknown
+    # field is never counted as a difference.
+    known: dict[tuple[str, str], dict[str, Any]] = {}
+    seen_in: dict[tuple[str, str], dict[str, str]] = {}
     for record in records:
         group = (record["model"], record["defense"])
-        first = reference.setdefault(group, record)
-        differing = conditions.differences(conditions.of_record(first), conditions.of_record(record))
+        condition = conditions.of_record(record)
+        reference = known.setdefault(group, {})
+        sources = seen_in.setdefault(group, {})
+        differing = conditions.differences(reference, condition)
         if differing:
+            where = ", ".join(sorted({sources[field] for field in differing}))
             raise MixedConditionsError(
                 f"Results for model {group[0]!r} (defense {group[1]!r}) were recorded under different "
                 f"conditions: {conditions.describe(differing)} "
-                f"({first['_source']} vs {record['_source']}). Analyse them separately, or record them "
+                f"({where} vs {record['_source']}). Analyse them separately, or record them "
                 "under different --label names if you want to compare them."
             )
+        for field, value in condition.items():
+            if value is not None and reference.get(field) is None:
+                reference[field] = value
+                sources[field] = record["_source"]
 
     latest: dict[tuple, dict[str, Any]] = {}
     for record in records:
