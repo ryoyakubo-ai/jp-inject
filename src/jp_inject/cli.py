@@ -219,10 +219,11 @@ def cmd_detect(args: argparse.Namespace) -> int:
     detectors = args.detector or list(detect.DEFAULT_DETECTORS)
 
     def loader(model_id: str):
-        return detect.load_hf_detector(model_id, device=args.device, batch_size=args.batch_size)
+        return detect.load_detector(model_id, device=args.device, batch_size=args.batch_size)
 
     try:
-        result = detect.score_cases(detectors, Path(args.out), cases=_select(dataset.load_cases(), args), loader=loader)
+        result = detect.score_cases(detectors, Path(args.out), cases=_select(dataset.load_cases(), args),
+                                    loader=loader, normalize=args.normalize)
     except detect.NothingToScore as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -323,10 +324,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("detect", help="score the test cases with prompt-injection detectors (needs jp-inject[detect])")
     p.add_argument("--out", required=True, help="score file (JSON Lines)")
     p.add_argument("--detector", action="append", metavar="HF_MODEL_ID",
-                   help="Hugging Face text-classification model (repeatable); pin a version with "
+                   help="Hugging Face text-classification model or Llama Guard 3 model (repeatable); "
+                        "pin a version with "
                         f"ID@COMMIT. Default: {', '.join(detect.DEFAULT_DETECTORS)}")
     p.add_argument("--device", default="cpu", help="cpu (default) or cuda")
     p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--normalize", action="store_true",
+                   help="also score each user message after NFKC normalisation and removal of "
+                        "zero-width characters (view message_nfkc)")
     _add_filters(p)
     p.set_defaults(func=cmd_detect)
 

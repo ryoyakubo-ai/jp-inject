@@ -238,3 +238,56 @@ def test_two_versions_of_one_detector_in_one_call_are_refused(scores):
     with pytest.raises(detect.NothingToScore):
         detect.score_cases(["fake/keyword", "fake/keyword@b"], out, loader=keyword_loader, log=lambda m: None)
     assert out.read_bytes() == before
+
+
+def test_normalize_folds_fullwidth_and_drops_zero_width_but_keeps_kana():
+    assert detect.normalize_text("Ｉｇｎｏｒｅ　ａｌｌ") == "Ignore all"
+    assert detect.normalize_text("無​視") == "無視"
+    assert detect.normalize_text("むしして") == "むしして"
+
+
+def test_normalized_view_lets_a_keyword_filter_catch_fullwidth(tmp_path):
+    out = tmp_path / "scores.jsonl"
+    detect.score_cases(["fake/keyword"], out, loader=keyword_loader, log=lambda m: None, normalize=True)
+    rows = detect.load_scores(out)
+    assert {row["view"] for row in rows} == {"message", "payload", "message_nfkc"}
+    summary = detect.summarize(rows)["fake/keyword"]
+    overview = summary["overview"]
+    assert overview["en_fullwidth"]["flagged"] == 0
+    assert overview["en_fullwidth_nfkc"]["flagged"] > 0
+    assert overview["direct"]["n"] + overview["indirect"]["n"] == 460
+    assert overview["benign"]["n"] == 30
+    text = detect.render_markdown(detect.summarize(rows))
+    assert "## Comparison" in text and "Flagged (after NFKC)" in text
+
+
+def test_comparison_has_one_row_per_detector_and_a_csv(scores, tmp_path):
+    out, _ = scores
+    detect.score_cases(["other/detector"], out, loader=keyword_loader, log=lambda m: None)
+    written = detect.write_report(detect.load_scores(out), tmp_path / "report")
+    names = {path.name for path in written}
+    assert "comparison.csv" in names
+    table = detect.render_comparison(detect.summarize(detect.load_scores(out)))
+    assert table.count("`fake/keyword`") == 1 and table.count("`other/detector`") == 1
+    # without a normalised run, the NFKC columns are left out
+    assert "NFKC" not in table
+    lines = (tmp_path / "report" / "comparison.csv").read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "detector,threshold,column,flagged,n"
+
+
+def test_generative_models_are_told_apart_from_classifiers():
+    assert detect.is_generative(["LlamaForCausalLM"])
+    assert detect.is_generative(["Llama4ForConditionalGeneration"])
+    assert not detect.is_generative(["DebertaV2ForSequenceClassification"])
+    assert not detect.is_generative(None)
+
+
+def test_guard_score_reads_the_first_word_after_blank_lines():
+    steps = [
+        {"safe": 0.0, "unsafe": 0.0, "chosen_is_space": True},
+        {"safe": 0.2, "unsafe": 0.6, "chosen_is_space": False},
+        {"safe": 0.9, "unsafe": 0.0, "chosen_is_space": False},
+    ]
+    assert detect.guard_verdict_score(steps) == pytest.approx(0.75)
+    assert detect.guard_verdict_score([{"safe": 0.0, "unsafe": 0.0, "chosen_is_space": False}]) == 0.0
+    assert detect.guard_verdict_score([]) == 0.0
