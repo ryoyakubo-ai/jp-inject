@@ -262,6 +262,27 @@ def _transformers_at_least(version: str, major: int, minor: int) -> bool:
     return tuple(parts) >= (major, minor)
 
 
+GUARD_PROBE = "jp-inject template probe 7Q2X"
+
+
+def guard_content_form(apply_chat_template: Callable[..., str]) -> str | None:
+    """How a guard's chat template wants the user text: ``"parts"``, ``"string"`` or ``None``.
+
+    Llama Guard 3 1B expects a list of content parts, 3 8B a plain string,
+    and each template may fail outright on the other form. Both forms are
+    tried once with a probe text; the first whose rendering contains the
+    text wins.
+    """
+    for form, content in (("parts", [{"type": "text", "text": GUARD_PROBE}]), ("string", GUARD_PROBE)):
+        try:
+            rendered = apply_chat_template([{"role": "user", "content": content}], tokenize=False)
+        except Exception:
+            continue
+        if GUARD_PROBE in rendered:
+            return form
+    return None
+
+
 def load_guard_lm(spec: str, *, device: str = "cpu", max_new_tokens: int = 6) -> tuple[Scorer, dict[str, Any]]:
     """Load a generative safety guard (Llama Guard 3) and score with its verdict.
 
@@ -303,14 +324,14 @@ def load_guard_lm(spec: str, *, device: str = "cpu", max_new_tokens: int = 6) ->
     if verdict_ids["safe"] == verdict_ids["unsafe"]:
         raise DetectorUnavailable(f"{model_id}: 'safe' and 'unsafe' start with the same token")
 
+    content_form = guard_content_form(tokenizer.apply_chat_template)
+    if content_form is None:
+        raise DetectorUnavailable(f"{model_id}: the chat template renders the user text neither from "
+                                  "content parts nor from a plain string")
+
     def prompt(text: str) -> str:
-        # Llama Guard 3 1B expects content parts, 3 8B a plain string. Use
-        # whichever form the template actually renders the text in.
-        for content in ([{"type": "text", "text": text}], text):
-            rendered = tokenizer.apply_chat_template([{"role": "user", "content": content}], tokenize=False)
-            if text.strip()[:40] in rendered:
-                return rendered
-        raise DetectorUnavailable(f"{model_id}: the chat template does not include the user text")
+        content = [{"type": "text", "text": text}] if content_form == "parts" else text
+        return tokenizer.apply_chat_template([{"role": "user", "content": content}], tokenize=False)
 
     def score(texts: Sequence[str]) -> list[dict[str, Any]]:
         out = []

@@ -297,3 +297,20 @@ def test_transformers_version_decides_the_dtype_argument():
     assert detect._transformers_at_least("5.23.0", 4, 56)
     assert detect._transformers_at_least("4.56.0.dev0", 4, 56)
     assert not detect._transformers_at_least("4.44.2", 4, 56)
+
+
+def _template(kind):
+    def apply(messages, tokenize=False):
+        content = messages[0]["content"]
+        if kind == "string":
+            return "User: " + content.strip()  # fails on a list, like Llama Guard 3 8B
+        if kind == "parts":
+            return "User: " + "".join(part["text"] for part in content if isinstance(part, dict))
+        return "User: "
+    return apply
+
+
+def test_guard_template_form_is_found_for_list_and_string_templates():
+    assert detect.guard_content_form(_template("parts")) == "parts"
+    assert detect.guard_content_form(_template("string")) == "string"
+    assert detect.guard_content_form(_template("neither")) is None
