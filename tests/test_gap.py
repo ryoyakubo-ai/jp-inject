@@ -110,3 +110,18 @@ def test_cli_writes_the_report(inputs, tmp_path, capsys):
     json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert cli.main(["gap-report", str(scores), "--runs", str(runs[1]), "--out", str(out)]) == 2
     assert "without input normalisation" in capsys.readouterr().err
+
+
+def test_runs_that_differ_in_more_than_normalisation_are_refused(inputs, tmp_path):
+    scores, runs = inputs
+    changed = tmp_path / "hotter+nfkc.jsonl"
+    with changed.open("w", encoding="utf-8", newline="\n") as handle:
+        for line in runs[1].read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            record["request"]["temperature"] = 1.3
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    judged = analysis.judged_rows(analysis.load_records([runs[0], changed]))
+    with pytest.raises(gap.GapInputError, match="temperature"):
+        gap.summarize(detect.load_scores(scores), judged)
+    assert cli.main(["gap-report", str(scores), "--runs", str(runs[0]), str(changed),
+                     "--out", str(tmp_path / "out")]) == 2

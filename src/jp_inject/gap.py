@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .analysis import CROSS_IDS, VARIANT_ORDER, Row, _ci, _diff, _json_safe, _pct, _table
+from . import conditions as run_conditions
 from .conditions import NO_NORMALIZATION
 from .dataset import VARIANT_BY_ID, load_cases
 from .detect import DEFAULT_THRESHOLD, NORMALIZED_VIEWS
@@ -107,15 +108,41 @@ def model_tables(judged: Iterable[Row]) -> dict[tuple[str, str], dict[str, Any]]
     the run (``"none"`` for a plain run). Runs are paired by the model
     identifier the server was asked for, not by their label, because a
     normalised run carries a label of its own.
+
+    The runs of one model must differ in input normalisation only. If any
+    other known part of the condition differs (test cases, server, model
+    file, temperature, token limit, seed, extra request fields), a change in
+    the success rate could not be attributed to normalisation, and the
+    input is refused.
     """
     counts: dict[tuple, list[int]] = defaultdict(lambda: [0, 0])
     readable: dict[tuple, list[int]] = defaultdict(lambda: [0, 0])
     labels: dict[tuple[str, str], dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    known: dict[tuple[str, str], dict[str, Any]] = defaultdict(dict)
+    seen_in: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
     for row in judged:
-        if not row["valid"]:
-            continue
         group = (row.get("model_id") or row["model"], row["defense"])
         level = row.get("input_normalization") or NO_NORMALIZATION
+        # Checked on every row, valid or not: an unusable generation was still
+        # produced under the run's condition. Remember the first known value
+        # of each field, as analysis.load_records does within one label.
+        condition = {field: value for field, value in (row.get("condition") or {}).items()
+                     if field != "input_normalization"}
+        differing = run_conditions.differences(known[group], condition)
+        if differing:
+            where = ", ".join(sorted({seen_in[group][field] for field in differing}))
+            raise GapInputError(
+                f"the runs of model {group[0]!r} (defense {group[1]!r}) differ in more than input "
+                f"normalisation: {run_conditions.describe(differing)} ({where} vs {row['model']}). "
+                "A difference between them could not be attributed to normalisation; record the "
+                "normalised run with the same settings as the plain one."
+            )
+        for field, value in condition.items():
+            if value is not None and known[group].get(field) is None:
+                known[group][field] = value
+                seen_in[group][field] = row["model"]
+        if not row["valid"]:
+            continue
         labels[group][level].add(row["model"])
         if row["kind"] == "attack":
             cell = counts[(group, level, row["variant"], row["base"])]
@@ -422,7 +449,10 @@ def plot_gap(pair: dict[str, Any], path: Path) -> bool:
     """Scatter of missed (x) against followed (y), one labelled point per wording.
 
     The upper right is where a detector gives no protection against an
-    attack that works. Needs matplotlib; returns False without it.
+    attack that works. The two axes are averages over base attacks, and the
+    detector may miss exactly the base attacks the model follows (or the
+    opposite), so the missed-and-followed rate cannot be read off as their
+    product; it is in the tables. Needs matplotlib; returns False without it.
     """
     try:
         import matplotlib
@@ -444,13 +474,6 @@ def plot_gap(pair: dict[str, Any], path: Path) -> bool:
 
     fig, ax = plt.subplots(figsize=(8.2, 6.4), facecolor=surface)
     ax.set_facecolor(surface)
-    # Lines of equal "missed and followed": the product of the two axes.
-    xs = [x / 2 for x in range(2, 211)]
-    for level in (5, 10, 20, 40):
-        ys = [level * 100 / x for x in xs]
-        ax.plot(xs, ys, color=grid, lw=1, zorder=1)
-        if level * 100 / 102 < top:
-            ax.text(102, level * 100 / 102, f"{level}%", fontsize=8, color=muted, va="center", ha="left")
     # Spread labels of points that share a spot: detectors score each text once,
     # so many wordings sit at exactly the same x.
     placed: list[tuple[float, float]] = []
@@ -463,7 +486,7 @@ def plot_gap(pair: dict[str, Any], path: Path) -> bool:
         placed.append((x, label_y))
         ax.annotate(condition, (x, y), xytext=(x - 1.8, label_y), fontsize=8, color=ink, ha="right", va="center",
                     arrowprops={"arrowstyle": "-", "color": "#b8b6b0", "lw": 0.8} if label_y != y else None, zorder=2)
-    ax.set_xlim(-22, 108)
+    ax.set_xlim(-22, 104)
     ax.set_ylim(-top * 0.06, top)
     ax.set_xticks(range(0, 101, 20))
     ax.set_xlabel("Missed by the detector (% of 20 base attacks)", fontsize=9, color=muted)
@@ -475,7 +498,6 @@ def plot_gap(pair: dict[str, Any], path: Path) -> bool:
         spine.set_visible(False)
     handles = [plt.Line2D([], [], marker="o", ls="", ms=8, color=colors[lang], mec=surface, mew=2, label=names[lang])
                for lang in ("ja", "en") if any(c.startswith(lang + ".") for _, _, c in points)]
-    handles.append(plt.Line2D([], [], ls="-", lw=1, color=grid, label="equal missed-and-followed rate"))
     ax.legend(handles=handles, loc="lower right", bbox_to_anchor=(1.0, 1.0), ncols=3, frameon=False,
               fontsize=9, labelcolor=ink, borderaxespad=0.2)
     ax.set_title(_title(pair), loc="left", fontsize=11, color=ink, pad=24)
