@@ -15,6 +15,7 @@ from typing import Any
 __all__ = [
     "CONDITION_FIELDS",
     "FINGERPRINT_KEYS",
+    "NO_NORMALIZATION",
     "describe",
     "differences",
     "fingerprint",
@@ -32,7 +33,12 @@ CONDITION_FIELDS = (
     "max_tokens",
     "seed",
     "extra",
+    "input_normalization",
 )
+
+# Value of ``input_normalization`` for a run that sent the user message as it
+# is. Records written before the field existed were all of this kind.
+NO_NORMALIZATION = "none"
 
 # Stable parts of the model metadata a server reports. Volatile fields (load
 # state, loaded context length) are left out on purpose.
@@ -74,6 +80,8 @@ def of_record(record: dict[str, Any]) -> dict[str, Any]:
         # Each pass uses seed + pass number; the run's base seed is what must match.
         "seed": None if seed is None else seed - record.get("repeat", 0),
         "extra": request.get("extra") or {},
+        # Never unknown: a record without the field predates the option.
+        "input_normalization": record.get("input_normalization") or NO_NORMALIZATION,
     }
 
 

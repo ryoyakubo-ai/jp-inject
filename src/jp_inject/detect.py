@@ -22,7 +22,6 @@ import math
 import os
 import platform
 import sys
-import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +30,8 @@ from typing import Any, Callable, Iterable, Sequence
 from . import __version__
 from .analysis import CROSS_IDS, VARIANT_ORDER, DatasetMismatchError, Row, _ci, _diff, _json_safe, _table
 from .dataset import VARIANT_BY_ID, dataset_sha256, load_cases
+from .normalize import LEVELS, nfkc
+from .normalize import normalize as _normalize
 from .stats import bootstrap_mean
 
 DEFAULT_DETECTORS = (
@@ -63,8 +64,12 @@ MAX_TOKENS = 512
 #   message_nfkc  the user message after NFKC normalisation and removal of
 #            invisible format characters (zero-width spaces and the like),
 #            i.e. what the detector would see behind the cheapest
-#            countermeasure. Scored only with ``normalize=True``.
-VIEWS = ("message", "payload", "message_nfkc")
+#            countermeasure. Scored only when asked for (``normalize``).
+#   message_fold  the user message after the ``fold`` level of
+#            :mod:`jp_inject.normalize` (NFKC, modern kanji forms, look-alike
+#            repair). Scored only when asked for.
+VIEWS = ("message", "payload", "message_nfkc", "message_fold")
+NORMALIZED_VIEWS = {level: f"message_{level}" for level in LEVELS}
 LEGACY_VIEWS = {"document": "message"}  # name used in score files written before the rename
 
 # Names detectors give their "not an attack" class. Everything else counts as
@@ -223,8 +228,7 @@ def normalize_text(text: str) -> str:
     characters; it does not touch kana, romaji, old-style kanji or
     cross-script look-alikes.
     """
-    folded = unicodedata.normalize("NFKC", text)
-    return "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
+    return nfkc(text)
 
 
 def is_generative(architectures: Sequence[str] | None) -> bool:
@@ -385,13 +389,29 @@ def load_detector(spec: str, *, device: str = "cpu", batch_size: int = 8) -> tup
     return load_hf_detector(spec, device=device, batch_size=batch_size)
 
 
-def case_views(case: dict[str, Any], *, normalize: bool = False) -> dict[str, str]:
+def normalize_levels(wanted: bool | Sequence[str]) -> tuple[str, ...]:
+    """The normalisation levels a caller asked for, in the order of ``LEVELS``.
+
+    ``True`` (and an empty sequence, from a bare ``--normalize``) means the
+    ``nfkc`` level, which is what the option did before levels existed.
+    """
+    if wanted is False or wanted is None:
+        return ()
+    if wanted is True or not wanted:
+        return ("nfkc",)
+    unknown = sorted(set(wanted) - set(LEVELS))
+    if unknown:
+        raise ValueError(f"unknown normalisation level(s) {', '.join(unknown)}; choose from {', '.join(LEVELS)}")
+    return tuple(level for level in LEVELS if level in wanted)
+
+
+def case_views(case: dict[str, Any], *, normalize: bool | Sequence[str] = False) -> dict[str, str]:
     """The texts of one case a filter could be asked to judge."""
     views = {"message": case["user"]}
     if case.get("payload") and case["payload"] != case["user"]:
         views["payload"] = case["payload"]
-    if normalize:
-        views["message_nfkc"] = normalize_text(case["user"])
+    for level in normalize_levels(normalize):
+        views[NORMALIZED_VIEWS[level]] = _normalize(case["user"], level)
     return views
 
 
@@ -402,7 +422,7 @@ def score_cases(
     cases: Sequence[dict[str, Any]] | None = None,
     loader: Callable[[str], tuple[Scorer, dict[str, Any]]] | None = None,
     log: Callable[[str], None] = lambda message: print(message, file=sys.stderr),
-    normalize: bool = False,
+    normalize: bool | Sequence[str] = False,
 ) -> dict[str, Any]:
     """Score every case with every detector and write ``out`` (JSON Lines).
 
@@ -412,8 +432,13 @@ def score_cases(
     results it already had; if nothing could be scored the file is not
     touched. Results of detectors not named in this call are kept.
 
-    With ``normalize``, the user message is also scored after
-    :func:`normalize_text` (view ``message_nfkc``).
+    With ``normalize`` (``True`` or a list of levels from
+    :data:`jp_inject.normalize.LEVELS`), the user message is also scored
+    after each level (views ``message_nfkc``, ``message_fold``).
+
+    A detector is deterministic, so a text that occurs more than once (a
+    message normalisation did not change, for instance) is scored once and
+    the result is recorded for every case and view it belongs to.
     """
     cases = list(cases) if cases is not None else load_cases()
     if not cases:
@@ -444,10 +469,13 @@ def score_cases(
         log(f"loading {detector} ...")
         try:
             scorer, info = loader(detector)
-            results = []
-            for start in range(0, len(jobs), 64):
-                results.extend(scorer([text for _, _, text in jobs[start:start + 64]]))
-                log(f"  {min(start + 64, len(jobs))}/{len(jobs)}")
+            unique = list(dict.fromkeys(text for _, _, text in jobs))
+            by_text: dict[str, dict[str, Any]] = {}
+            for start in range(0, len(unique), 64):
+                batch = unique[start:start + 64]
+                by_text.update(zip(batch, scorer(batch), strict=True))
+                log(f"  {min(start + 64, len(unique))}/{len(unique)} texts")
+            results = [by_text[text] for _, _, text in jobs]
         except DetectorUnavailable as exc:
             log(f"  skipped: {exc}")
             skipped.append({"detector": name, "reason": str(exc)})
@@ -639,6 +667,12 @@ OVERVIEW_COLUMNS: tuple[tuple[str, str, Callable[[Row], bool]], ...] = (
      lambda r: r["kind"] == "attack" and r["view"] == "message_nfkc" and r["variant"] == "en.fullwidth"),
     ("attacks_nfkc", "All attacks flagged after NFKC",
      lambda r: r["kind"] == "attack" and r["view"] == "message_nfkc"),
+    ("attacks_fold", "All attacks flagged after fold",
+     lambda r: r["kind"] == "attack" and r["view"] == "message_fold"),
+    ("benign_nfkc", "False positives after NFKC",
+     lambda r: r["kind"] == "benign" and r["view"] == "message_nfkc"),
+    ("benign_fold", "False positives after fold",
+     lambda r: r["kind"] == "benign" and r["view"] == "message_fold"),
 )
 
 
@@ -696,6 +730,9 @@ def render_markdown(summaries: dict[str, Any]) -> str:
         "- Detectors are scored once per case: a detector is deterministic.",
         "- **After NFKC** is the user message after Unicode NFKC normalisation and removal of",
         "  invisible format characters, as an application could do before calling the detector.",
+        "  **After fold** additionally replaces traditional kanji by modern forms and repairs",
+        "  cross-script look-alikes; its tables mirror the ones the test cases were written with,",
+        "  so it is a best case for the defender.",
         "",
         "## Comparison",
         "",
@@ -720,6 +757,7 @@ def render_markdown(summaries: dict[str, Any]) -> str:
         document = summary["views"].get("message", {})
         payload = summary["views"].get("payload", {})
         normalised = summary["views"].get("message_nfkc", {})
+        folded_view = summary["views"].get("message_fold", {})
         body = []
         for condition, entry in document.items():
             alone = payload.get(condition)
@@ -733,10 +771,15 @@ def render_markdown(summaries: dict[str, Any]) -> str:
             if normalised:
                 folded = normalised.get(condition)
                 row.append(_ci(folded) if folded else "")
+            if folded_view:
+                folded = folded_view.get(condition)
+                row.append(_ci(folded) if folded else "")
             body.append(row)
         headers = ["Condition", "Flagged (user message)", "Δ vs plain", "Flagged (payload)", "Δ vs plain"]
         if normalised:
             headers.append("Flagged (after NFKC)")
+        if folded_view:
+            headers.append("Flagged (after fold)")
         parts += [_table(headers, body), ""]
         for model, per_condition in summary.get("behind_filter", {}).items():
             parts += [f"### Attack success against {model} with this detector in front", "",

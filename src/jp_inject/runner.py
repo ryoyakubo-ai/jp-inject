@@ -17,6 +17,9 @@ llama.cpp server, vLLM). Only the standard library is used.
   configured host and nowhere else.
 * A result file holds one experimental condition per model: resuming with
   different settings or a different dataset version is refused.
+* With ``normalize``, the user message is normalised before it is sent, as an
+  application would do that normalises its input for the model too. Such a
+  run is a different condition and is stored under its own model label.
 """
 
 from __future__ import annotations
@@ -38,6 +41,8 @@ from typing import Any, Callable, Iterable
 
 from . import __version__, conditions
 from .dataset import case_system, dataset_sha256
+from .normalize import LEVELS as NORMALIZE_LEVELS
+from .normalize import normalize as normalize_input
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"  # LM Studio's default
 API_KEY_ENV = "JP_INJECT_API_KEY"
@@ -97,10 +102,15 @@ class RunConfig:
     extra: dict[str, Any] = field(default_factory=dict)
     allow_remote: bool = False
     concurrency: int = 1  # requests in flight at once; match the server's parallel slots
+    normalize: str | None = None  # a level of jp_inject.normalize applied to the user message
 
     def __post_init__(self) -> None:
         if self.concurrency < 1:
             raise ValueError("concurrency must be at least 1")
+        if self.normalize is not None and self.normalize not in NORMALIZE_LEVELS:
+            raise ValueError(
+                f"unknown normalisation level {self.normalize!r}; choose from {', '.join(NORMALIZE_LEVELS)}"
+            )
         reserved = sorted(set(self.extra) & set(RESERVED_REQUEST_FIELDS))
         if reserved:
             raise ValueError(
@@ -110,7 +120,11 @@ class RunConfig:
 
     @property
     def model_label(self) -> str:
-        return self.label or self.model
+        """Name stored in results. A normalised run gets its own default name
+        (``model+nfkc``), so that it cannot be pooled with the plain run."""
+        if self.label:
+            return self.label
+        return f"{self.model}+{self.normalize}" if self.normalize else self.model
 
 
 def is_local_url(url: str) -> bool:
@@ -156,7 +170,9 @@ def build_request(case: dict[str, Any], config: RunConfig, repeat: int) -> dict[
         "model": config.model,
         "messages": [
             {"role": "system", "content": case_system(case, config.defense)},
-            {"role": "user", "content": case["user"]},
+            # The system prompt is the application's own text; only what
+            # arrives from outside is normalised.
+            {"role": "user", "content": normalize_input(case["user"], config.normalize)},
         ],
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
@@ -236,6 +252,7 @@ def _condition(config: RunConfig, model_fingerprint: dict[str, Any] | None) -> d
         "max_tokens": config.max_tokens,
         "seed": config.seed,
         "extra": config.extra,
+        "input_normalization": config.normalize or conditions.NO_NORMALIZATION,
     }
 
 
@@ -292,6 +309,7 @@ def _write_meta(config: RunConfig, model_info: dict[str, Any] | None, planned: i
         "max_tokens": config.max_tokens,
         "seed": config.seed,
         "extra": config.extra,
+        "input_normalization": config.normalize or conditions.NO_NORMALIZATION,
         "planned_generations": planned,
         "concurrency": config.concurrency,
         "python": platform.python_version(),
@@ -382,6 +400,7 @@ def run(
             "model_id": config.model,
             "base_url": base_url,
             "model_fingerprint": model_fingerprint,
+            "input_normalization": config.normalize or conditions.NO_NORMALIZATION,
             **result,
             "request": {
                 "temperature": body["temperature"],

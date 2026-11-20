@@ -131,6 +131,10 @@ def judged_rows(records: Iterable[dict[str, Any]], cases: Iterable[dict[str, Any
         verdict = judge(case, record.get("content"), record.get("finish_reason"))
         rows.append({
             "model": record["model"],
+            "model_id": record.get("model_id") or record["model"],
+            "input_normalization": record.get("input_normalization") or conditions.NO_NORMALIZATION,
+            # Everything a generation must share with another to be comparable.
+            "condition": conditions.of_record(record),
             "defense": record["defense"],
             "case_id": case["id"],
             "repeat": record["repeat"],
