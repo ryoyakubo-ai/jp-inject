@@ -50,6 +50,44 @@
         }
       ],
       "skipped": []
+    },
+    {
+      "started_at": "2026-11-20T10:34:33+00:00",
+      "jp_inject_version": "0.1.0",
+      "dataset_sha256": "58a80b46945b380f8dcb9b9c19dbf0c7c851fb22c2ed98ab3849a072597f0732",
+      "python": "3.13.1",
+      "platform": "Windows-11-10.0.26300-SP0",
+      "scored": [
+        {
+          "detector": "protectai/deberta-v3-base-prompt-injection-v2",
+          "revision": "90c9989b1a342275dd0d1a95aad283c04e075671",
+          "requested_revision": null,
+          "id2label": {
+            "0": "SAFE",
+            "1": "INJECTION"
+          },
+          "benign_index": 0,
+          "max_tokens": 512,
+          "device": "cpu",
+          "torch": "2.15.0+cpu",
+          "transformers": "5.23.0"
+        },
+        {
+          "detector": "meta-llama/Llama-Prompt-Guard-2-86M",
+          "revision": "a8ded8e697ce7c355e395a0df51f94adb4a2fd27",
+          "requested_revision": null,
+          "id2label": {
+            "0": "LABEL_0",
+            "1": "LABEL_1"
+          },
+          "benign_index": 0,
+          "max_tokens": 512,
+          "device": "cpu",
+          "torch": "2.15.0+cpu",
+          "transformers": "5.23.0"
+        }
+      ],
+      "skipped": []
     }
   ]
 }

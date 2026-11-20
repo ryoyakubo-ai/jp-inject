@@ -420,10 +420,11 @@ countermeasure is cheap: normalise the text before it reaches the detector.
   application's request line and delimiters; the bare document was not
   scored). "Attack success with a detector in front" is computed from
   separate measurements (the model's success rate, set to zero for messages
-  the detector flagged); no end-to-end pipeline was run. The detectors were
-  downloaded from the Hugging Face hub on 20 November 2026 at their default
-  revision; the exact commits were not recorded for the published scores (the
-  tool records them from now on, and accepts `ID@COMMIT` to pin one). Full-width Japanese kana do not exist as a separate form, so the
+  the detector flagged); no end-to-end pipeline was run. The published scores
+  were produced with ProtectAI v2 at commit `90c9989b` and Prompt Guard 2 at
+  commit `a8ded8e6` (full hashes in `results/detectors/scores.jsonl.meta.json`);
+  a second, independent scoring run gave identical scores for all 2,010
+  texts. Full-width Japanese kana do not exist as a separate form, so the
   full-width condition is English only.
 - The 1,024-token limit excluded one planned model.
 
@@ -438,9 +439,11 @@ jp-inject report results/*.jsonl --out results/report
 # regenerate the detector tables (scores are stored; no model download needed)
 jp-inject detect-report results/detectors/scores.jsonl --runs results/*.jsonl --out results/detectors
 
-# score the detectors again (downloads them; Prompt Guard 2 is gated)
+# score the detectors again at the versions used here (downloads them; Prompt Guard 2 is gated)
 pip install -e ".[detect]"
-jp-inject detect --out results/detectors/scores.jsonl
+jp-inject detect --out results/detectors/scores.jsonl \
+  --detector protectai/deberta-v3-base-prompt-injection-v2@90c9989b1a342275dd0d1a95aad283c04e075671 \
+  --detector meta-llama/Llama-Prompt-Guard-2-86M@a8ded8e697ce7c355e395a0df51f94adb4a2fd27
 
 # repeat the judge validation
 jp-inject agreement results/validation/gpt-oss-20b/sheet.csv results/validation/gpt-oss-20b/key.jsonl
