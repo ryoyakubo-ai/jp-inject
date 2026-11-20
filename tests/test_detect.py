@@ -291,3 +291,9 @@ def test_guard_score_reads_the_first_word_after_blank_lines():
     assert detect.guard_verdict_score(steps) == pytest.approx(0.75)
     assert detect.guard_verdict_score([{"safe": 0.0, "unsafe": 0.0, "chosen_is_space": False}]) == 0.0
     assert detect.guard_verdict_score([]) == 0.0
+
+
+def test_transformers_version_decides_the_dtype_argument():
+    assert detect._transformers_at_least("5.23.0", 4, 56)
+    assert detect._transformers_at_least("4.56.0.dev0", 4, 56)
+    assert not detect._transformers_at_least("4.44.2", 4, 56)

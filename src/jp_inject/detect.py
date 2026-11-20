@@ -251,6 +251,17 @@ def guard_verdict_score(step_probs: Sequence[dict[str, float]], safe: str = "saf
     return 0.0
 
 
+def _transformers_at_least(version: str, major: int, minor: int) -> bool:
+    """Whether a transformers version string is at least ``major.minor``."""
+    parts = []
+    for piece in version.split(".")[:2]:
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 2:
+        parts.append(0)
+    return tuple(parts) >= (major, minor)
+
+
 def load_guard_lm(spec: str, *, device: str = "cpu", max_new_tokens: int = 6) -> tuple[Scorer, dict[str, Any]]:
     """Load a generative safety guard (Llama Guard 3) and score with its verdict.
 
@@ -273,7 +284,10 @@ def load_guard_lm(spec: str, *, device: str = "cpu", max_new_tokens: int = 6) ->
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_id, revision=requested)
         dtype = torch.float32 if device == "cpu" else torch.bfloat16
-        model = AutoModelForCausalLM.from_pretrained(model_id, revision=requested, dtype=dtype)
+        # transformers >= 4.56 calls the argument ``dtype``; older releases
+        # (pyproject allows 4.44) only understand ``torch_dtype``.
+        dtype_arg = "dtype" if _transformers_at_least(transformers.__version__, 4, 56) else "torch_dtype"
+        model = AutoModelForCausalLM.from_pretrained(model_id, revision=requested, **{dtype_arg: dtype})
     except Exception as exc:
         hint = ""
         if "gated" in str(exc).lower() or "401" in str(exc) or "403" in str(exc):
