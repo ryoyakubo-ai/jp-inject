@@ -1,0 +1,37 @@
+{
+  "invocations": [
+    {
+      "started_at": "2026-11-19T23:14:31+00:00",
+      "jp_inject_version": "0.1.0",
+      "dataset_sha256": "58a80b46945b380f8dcb9b9c19dbf0c7c851fb22c2ed98ab3849a072597f0732",
+      "model": "gpt-oss-20b",
+      "label": "gpt-oss-20b",
+      "base_url": "http://localhost:1234/v1",
+      "defense": "basic",
+      "repeats": 5,
+      "temperature": 0.7,
+      "max_tokens": 1024,
+      "seed": 0,
+      "extra": {},
+      "planned_generations": 2725,
+      "concurrency": 4,
+      "python": "3.13.1",
+      "platform": "Windows-11-10.0.26300-SP0",
+      "model_info": {
+        "id": "gpt-oss-20b",
+        "object": "model",
+        "type": "llm",
+        "publisher": "lmstudio-community",
+        "arch": "gpt-oss",
+        "compatibility_type": "gguf",
+        "quantization": "MXFP4",
+        "state": "loaded",
+        "max_context_length": 131072,
+        "loaded_context_length": 8192,
+        "capabilities": [
+          "tool_use"
+        ]
+      }
+    }
+  ]
+}

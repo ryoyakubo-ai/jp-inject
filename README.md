@@ -12,8 +12,13 @@ technique, how the attack success rate moves.
 日本語の概要は [README.ja.md](README.ja.md) にあります。
 
 > **Status: v0.1.** The test cases, transforms, runner, judge and analysis are
-> complete and tested. Measurements on real models have not been published yet;
-> when they are, they will be added under `results/` together with a written report.
+> complete and tested. The first measurement (two local models, 2,725
+> generations each) is in [docs/report.md](docs/report.md), with the raw
+> responses under `results/`. Short version: on these two models we could
+> not confirm any Japanese-specific wording or re-spelling that makes
+> injection more effective on both, and most made it less effective. Of two
+> open detectors placed in front of the model, neither flagged English written
+> in full-width letters, which the models still followed.
 
 ## Why this exists
 
@@ -131,6 +136,31 @@ T.reading_to_hankaku("しすてむ めっせーじ")     # 'ｼｽﾃﾑﾒｯ�
 Kana and romaji transforms take a *reading* (the sentence in hiragana with
 spaces between words) instead of guessing how kanji are read. See
 [docs/techniques.md](docs/techniques.md).
+
+## Testing an input filter instead of a model
+
+A model is one line of defence; many applications put a classifier in front of
+it that is meant to flag injected text before the model sees it. `jp-inject
+detect` scores every test case with such classifiers from the Hugging Face hub
+and reports, per wording, how many of the 20 base attacks were flagged. The
+detector is shown the whole user message the application would send to the
+model.
+
+```powershell
+pip install -e ".[detect]"          # adds torch and transformers
+jp-inject detect --out results/detectors/scores.jsonl
+jp-inject detect-report results/detectors/scores.jsonl --runs results/*.jsonl --out results/detectors
+```
+
+By default it scores `protectai/deberta-v3-base-prompt-injection-v2` and
+`meta-llama/Llama-Prompt-Guard-2-86M`; add or replace with `--detector
+<hub-id>`, or pin a version with `--detector <hub-id>@<commit>` (the commit
+that was used is recorded next to the scores). The second is gated: accept its licence on its Hugging Face page and
+run `hf auth login` first, otherwise it is skipped and reported as skipped.
+With `--runs`, the report also shows the attack success rate that remains when
+a generation counts only if the detector missed the user message *and* the
+model followed it. Scores are stored raw, so `--threshold` can be changed without
+scoring again.
 
 ## How results are judged, and how much to trust them
 
