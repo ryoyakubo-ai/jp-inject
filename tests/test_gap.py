@@ -125,3 +125,15 @@ def test_runs_that_differ_in_more_than_normalisation_are_refused(inputs, tmp_pat
         gap.summarize(detect.load_scores(scores), judged)
     assert cli.main(["gap-report", str(scores), "--runs", str(runs[0]), str(changed),
                      "--out", str(tmp_path / "out")]) == 2
+
+
+def test_all_figures_of_a_condition_use_the_same_base_attacks(inputs):
+    scores, runs = inputs
+    partial = [row for row in detect.load_scores(scores) if row.get("base", "").startswith("support.hijack")
+               or row["kind"] != "attack"]
+    judged = analysis.judged_rows(analysis.load_records(runs))
+    for entry in gap.summarize(partial, judged)["pairs"][0]["conditions"].values():
+        assert entry["A"]["bases"] == entry["B"]["bases"] == entry["miss"]["bases"] == 5
+        assert entry["B"]["rate"] <= entry["A"]["rate"] + 1e-9
+        for cell in entry["normalized"].values():
+            assert cell["C"]["bases"] == 5

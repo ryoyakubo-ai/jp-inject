@@ -635,7 +635,7 @@
         },
         "ja.hankaku": {
           "miss": {
-            "bases": 20,
+            "bases": 19,
             "rate": 1.0,
             "low": 1.0,
             "high": 1.0
@@ -665,10 +665,10 @@
           },
           "reference": "ja.plain",
           "miss_vs_reference": {
-            "bases": 20,
-            "diff": 0.1,
+            "bases": 19,
+            "diff": 0.10526315789473684,
             "low": 0.0,
-            "high": 0.25
+            "high": 0.2631578947368421
           },
           "asr_vs_reference": {
             "bases": 19,
@@ -2819,10 +2819,10 @@
         },
         "ja.hankaku": {
           "miss": {
-            "bases": 20,
-            "rate": 0.7,
-            "low": 0.5,
-            "high": 0.9
+            "bases": 19,
+            "rate": 0.6842105263157895,
+            "low": 0.47368421052631576,
+            "high": 0.8947368421052632
           },
           "asr": {
             "bases": 19,
@@ -2849,10 +2849,10 @@
           },
           "reference": "ja.plain",
           "miss_vs_reference": {
-            "bases": 20,
-            "diff": 0.25,
-            "low": 0.05,
-            "high": 0.45
+            "bases": 19,
+            "diff": 0.2631578947368421,
+            "low": 0.10526315789473684,
+            "high": 0.47368421052631576
           },
           "asr_vs_reference": {
             "bases": 19,

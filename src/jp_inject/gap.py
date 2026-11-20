@@ -233,7 +233,24 @@ def summarize(scores: list[Row], judged: list[Row], *, threshold: float = DEFAUL
             conditions = [c for c in VARIANT_ORDER + CROSS_IDS if c in raw and c in views["message"]]
             table: dict[str, Any] = {}
             for condition in conditions:
-                asr, miss = raw[condition], views["message"][condition]
+                # Every figure of one condition is computed over the same base
+                # attacks: those present in the model run, the detector scores
+                # and every normalised view and run that covers the condition.
+                # Otherwise a detector scored on part of the attacks would be
+                # compared with a model rate over all of them.
+                sources = [raw[condition], views["message"][condition]]
+                sources += [views[NORMALIZED_VIEWS[level]][condition] for level in levels
+                            if views[NORMALIZED_VIEWS[level]].get(condition)]
+                sources += [model["asr"][level][condition] for level in levels
+                            if model["asr"].get(level, {}).get(condition)]
+                shared = set.intersection(*(set(source) for source in sources))
+                if not shared:
+                    continue
+
+                def only(values: PerBase, shared: set[str] = shared) -> PerBase:
+                    return {base: values[base] for base in shared}
+
+                asr, miss = only(raw[condition]), only(views["message"][condition])
                 behind = _product(asr, miss)
                 entry: dict[str, Any] = {
                     "miss": _mean(miss),
@@ -255,11 +272,13 @@ def summarize(scores: list[Row], judged: list[Row], *, threshold: float = DEFAUL
                     miss_n = views[NORMALIZED_VIEWS[level]].get(condition)
                     if not miss_n:
                         continue
+                    miss_n = only(miss_n)
                     c = _product(asr, miss_n)
                     cell: dict[str, Any] = {"miss": _mean(miss_n), "miss_vs_raw": _paired(miss_n, miss),
                                             "C": _mean(c), "C_vs_B": _paired(c, behind)}
                     asr_n = model["asr"].get(level, {}).get(condition)
                     if asr_n:
+                        asr_n = only(asr_n)
                         d = _product(asr_n, miss_n)
                         cell.update({"asr": _mean(asr_n), "asr_vs_raw": _paired(asr_n, asr),
                                      "D": _mean(d), "D_vs_C": _paired(d, c), "D_vs_B": _paired(d, behind)})
